@@ -59,48 +59,33 @@ function WebMapView({ userLocation, territories }: { userLocation: { lat: number
   const lat = userLocation?.lat || 41.2995;
   const lng = userLocation?.lng || 69.2401;
   
-  // Create markers for all users with runs
-  const markers = territories
-    .filter(t => t.runs.length > 0 && t.runs[0].route.length > 0)
-    .map((t, i) => {
-      const firstPoint = t.runs[0].route[0];
-      return `markers=color:blue%7Clabel:${t.user_name.charAt(0)}%7C${firstPoint.lat},${firstPoint.lng}`;
-    })
-    .join('&');
-
-  // Create path for routes
-  const paths = territories
-    .filter(t => t.runs.length > 0)
-    .map((t, i) => {
-      const color = ROUTE_COLORS[i % ROUTE_COLORS.length].replace('#', '0x');
-      return t.runs.map(run => {
-        if (run.route.length < 2) return '';
-        const pathPoints = run.route.map(p => `${p.lat},${p.lng}`).join('|');
-        return `path=color:${color}|weight:4|${pathPoints}`;
-      }).join('&');
-    })
-    .filter(p => p)
-    .join('&');
-
   const mapUrl = `https://www.google.com/maps/embed/v1/view?key=${GOOGLE_MAPS_API_KEY}&center=${lat},${lng}&zoom=14&maptype=roadmap`;
 
   return (
     <View style={styles.webMapContainer}>
-      <iframe
-        src={mapUrl}
-        style={{
-          width: '100%',
-          height: '100%',
-          border: 'none',
-          borderRadius: 12,
-        }}
-        allowFullScreen
-        loading="lazy"
-        referrerPolicy="no-referrer-when-downgrade"
-      />
+      {Platform.OS === 'web' ? (
+        <View style={{ flex: 1, borderRadius: 12, overflow: 'hidden' }}>
+          <iframe
+            src={mapUrl}
+            style={{
+              width: '100%',
+              height: '100%',
+              border: 'none',
+            }}
+            allowFullScreen
+            loading="lazy"
+            referrerPolicy="no-referrer-when-downgrade"
+          />
+        </View>
+      ) : (
+        <View style={styles.mapFallback}>
+          <Ionicons name="map" size={64} color="#4DA6FF" />
+          <Text style={styles.mapFallbackText}>Xarita mobil ilovada ishlaydi</Text>
+        </View>
+      )}
       {/* Overlay with user info */}
       <View style={styles.webMapOverlay}>
-        <Text style={styles.webMapOverlayTitle}>Users on Map</Text>
+        <Text style={styles.webMapOverlayTitle}>Xaritadagi foydalanuvchilar</Text>
         {territories.filter(t => t.runs.length > 0).slice(0, 3).map((t, i) => (
           <View key={t.user_id} style={styles.webMapUser}>
             <View style={[styles.colorDot, { backgroundColor: ROUTE_COLORS[i % ROUTE_COLORS.length] }]} />
@@ -109,7 +94,7 @@ function WebMapView({ userLocation, territories }: { userLocation: { lat: number
           </View>
         ))}
         {territories.filter(t => t.runs.length > 0).length === 0 && (
-          <Text style={styles.webMapNoData}>No running routes yet</Text>
+          <Text style={styles.webMapNoData}>Hali yugurish yo'llari yo'q</Text>
         )}
       </View>
     </View>
