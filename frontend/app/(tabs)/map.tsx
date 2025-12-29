@@ -6,13 +6,27 @@ import {
   ActivityIndicator,
   Platform,
   TouchableOpacity,
-  Dimensions,
+  ScrollView,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
 import axios from 'axios';
+
+// Conditionally import MapView only for native platforms
+let MapView: any = null;
+let Marker: any = null;
+let Polyline: any = null;
+let PROVIDER_GOOGLE: any = null;
+
+if (Platform.OS !== 'web') {
+  const Maps = require('react-native-maps');
+  MapView = Maps.default;
+  Marker = Maps.Marker;
+  Polyline = Maps.Polyline;
+  PROVIDER_GOOGLE = Maps.PROVIDER_GOOGLE;
+}
 
 const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
