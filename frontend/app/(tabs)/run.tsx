@@ -7,11 +7,13 @@ import {
   Alert,
   Platform,
   Vibration,
+  ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../src/context/AuthContext';
+import { WebView } from 'react-native-webview';
 import axios from 'axios';
 
 const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
@@ -24,19 +26,259 @@ interface LocationPoint {
   accuracy: number | null;
 }
 
+// Generate Leaflet HTML with real-time route
+function generateLiveMapHTML(
+  userLocation: { lat: number; lng: number },
+  route: LocationPoint[]
+): string {
+  const routePoints = route.map(p => `[${p.lat}, ${p.lng}]`).join(',');
+  
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; width: 100%; }
+    #map { height: 100%; width: 100%; }
+    .leaflet-control-attribution { display: none; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <script>
+    var map = L.map('map', {
+      zoomControl: false,
+      attributionControl: false
+    }).setView([${userLocation.lat}, ${userLocation.lng}], 16);
+
+    // White/Light theme tiles from OpenStreetMap
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19
+    }).addTo(map);
+
+    // Route polyline (blue line)
+    var routeCoords = [${routePoints}];
+    if (routeCoords.length > 0) {
+      var polyline = L.polyline(routeCoords, {
+        color: '#4DA6FF',
+        weight: 5,
+        opacity: 0.9,
+        lineJoin: 'round',
+        lineCap: 'round'
+      }).addTo(map);
+
+      // Start marker (green)
+      L.circleMarker(routeCoords[0], {
+        radius: 10,
+        fillColor: '#4CAF50',
+        color: '#fff',
+        weight: 3,
+        opacity: 1,
+        fillOpacity: 1
+      }).addTo(map).bindPopup('<b>Boshlang\\'ich nuqta</b>');
+
+      // Current position marker (blue pulsing)
+      var currentPos = routeCoords[routeCoords.length - 1];
+      L.circleMarker(currentPos, {
+        radius: 12,
+        fillColor: '#4DA6FF',
+        color: '#fff',
+        weight: 3,
+        opacity: 1,
+        fillOpacity: 1
+      }).addTo(map);
+
+      // Pulse effect
+      L.circleMarker(currentPos, {
+        radius: 25,
+        fillColor: '#4DA6FF',
+        color: '#4DA6FF',
+        weight: 2,
+        opacity: 0.3,
+        fillOpacity: 0.2
+      }).addTo(map);
+
+      // Fit map to show entire route
+      if (routeCoords.length > 1) {
+        map.fitBounds(polyline.getBounds(), { padding: [30, 30] });
+      }
+    } else {
+      // Just show user location
+      L.circleMarker([${userLocation.lat}, ${userLocation.lng}], {
+        radius: 10,
+        fillColor: '#4DA6FF',
+        color: '#fff',
+        weight: 3,
+        opacity: 1,
+        fillOpacity: 1
+      }).addTo(map);
+    }
+  </script>
+</body>
+</html>
+  `;
+}
+
+// Web Leaflet Component
+function LiveMapWeb({ userLocation, route }: { 
+  userLocation: { lat: number; lng: number }; 
+  route: LocationPoint[] 
+}) {
+  const mapRef = useRef<any>(null);
+  const leafletMapRef = useRef<any>(null);
+  const polylineRef = useRef<any>(null);
+  const currentMarkerRef = useRef<any>(null);
+  const pulseMarkerRef = useRef<any>(null);
+
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      // Load Leaflet
+      const linkEl = document.createElement('link');
+      linkEl.rel = 'stylesheet';
+      linkEl.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+      document.head.appendChild(linkEl);
+
+      const scriptEl = document.createElement('script');
+      scriptEl.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+      scriptEl.onload = () => {
+        initMap();
+      };
+      document.head.appendChild(scriptEl);
+
+      return () => {
+        if (leafletMapRef.current) {
+          leafletMapRef.current.remove();
+        }
+      };
+    }
+  }, []);
+
+  const initMap = () => {
+    const L = (window as any).L;
+    if (!L) return;
+
+    const mapContainer = document.getElementById('live-map-container');
+    if (!mapContainer) return;
+
+    // Clear existing
+    mapContainer.innerHTML = '';
+    const mapDiv = document.createElement('div');
+    mapDiv.id = 'live-map';
+    mapDiv.style.width = '100%';
+    mapDiv.style.height = '100%';
+    mapContainer.appendChild(mapDiv);
+
+    const map = L.map('live-map', {
+      zoomControl: false,
+      attributionControl: false
+    }).setView([userLocation.lat, userLocation.lng], 16);
+
+    // Light/white tiles
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19
+    }).addTo(map);
+
+    leafletMapRef.current = map;
+
+    // Initialize polyline
+    polylineRef.current = L.polyline([], {
+      color: '#4DA6FF',
+      weight: 5,
+      opacity: 0.9
+    }).addTo(map);
+
+    // Current position marker
+    currentMarkerRef.current = L.circleMarker([userLocation.lat, userLocation.lng], {
+      radius: 12,
+      fillColor: '#4DA6FF',
+      color: '#fff',
+      weight: 3,
+      fillOpacity: 1
+    }).addTo(map);
+
+    // Pulse
+    pulseMarkerRef.current = L.circleMarker([userLocation.lat, userLocation.lng], {
+      radius: 25,
+      fillColor: '#4DA6FF',
+      color: '#4DA6FF',
+      weight: 2,
+      opacity: 0.3,
+      fillOpacity: 0.2
+    }).addTo(map);
+  };
+
+  useEffect(() => {
+    if (Platform.OS === 'web' && leafletMapRef.current && route.length > 0) {
+      const L = (window as any).L;
+      const latLngs = route.map(p => [p.lat, p.lng]);
+      
+      // Update polyline
+      if (polylineRef.current) {
+        polylineRef.current.setLatLngs(latLngs);
+      }
+
+      // Update current position
+      const lastPos = route[route.length - 1];
+      if (currentMarkerRef.current) {
+        currentMarkerRef.current.setLatLng([lastPos.lat, lastPos.lng]);
+      }
+      if (pulseMarkerRef.current) {
+        pulseMarkerRef.current.setLatLng([lastPos.lat, lastPos.lng]);
+      }
+
+      // Pan to current position
+      leafletMapRef.current.panTo([lastPos.lat, lastPos.lng]);
+    }
+  }, [route]);
+
+  if (Platform.OS === 'web') {
+    return (
+      <View style={styles.mapContainer}>
+        <div 
+          id="live-map-container" 
+          style={{ width: '100%', height: '100%', borderRadius: 12, overflow: 'hidden' }}
+        />
+      </View>
+    );
+  }
+
+  // Native - use WebView
+  const htmlContent = generateLiveMapHTML(userLocation, route);
+  return (
+    <View style={styles.mapContainer}>
+      <WebView
+        key={route.length} // Force refresh on route update
+        style={styles.webview}
+        originWhitelist={['*']}
+        source={{ html: htmlContent }}
+        javaScriptEnabled={true}
+        domStorageEnabled={true}
+        scrollEnabled={false}
+      />
+    </View>
+  );
+}
+
 export default function RunScreen() {
   const { token, refreshUser } = useAuth();
   const [isRunning, setIsRunning] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
-  const [distance, setDistance] = useState(0); // in meters
-  const [duration, setDuration] = useState(0); // in seconds
-  const [currentSpeed, setCurrentSpeed] = useState(0); // in km/h
-  const [avgSpeed, setAvgSpeed] = useState(0); // in km/h
-  const [maxSpeed, setMaxSpeed] = useState(0); // in km/h
+  const [distance, setDistance] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [currentSpeed, setCurrentSpeed] = useState(0);
+  const [avgSpeed, setAvgSpeed] = useState(0);
+  const [maxSpeed, setMaxSpeed] = useState(0);
   const [calories, setCalories] = useState(0);
   const [gpsAccuracy, setGpsAccuracy] = useState<number | null>(null);
   const [route, setRoute] = useState<LocationPoint[]>([]);
   const [startTime, setStartTime] = useState<Date | null>(null);
+  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number }>({ lat: 41.2995, lng: 69.2401 });
+  const [showMap, setShowMap] = useState(true);
   
   const locationSubscription = useRef<Location.LocationSubscription | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
@@ -45,12 +287,27 @@ export default function RunScreen() {
   const maxSpeedRef = useRef(0);
 
   useEffect(() => {
+    // Get initial location
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === 'granted') {
+          const location = await Location.getCurrentPositionAsync({});
+          setUserLocation({
+            lat: location.coords.latitude,
+            lng: location.coords.longitude,
+          });
+        }
+      } catch (e) {
+        console.log('Initial location error:', e);
+      }
+    })();
+
     return () => {
       cleanupTracking();
     };
   }, []);
 
-  // Calculate average speed whenever distance or duration changes
   useEffect(() => {
     if (duration > 0 && distance > 0) {
       const avgKmH = (distance / 1000) / (duration / 3600);
@@ -58,7 +315,6 @@ export default function RunScreen() {
     }
   }, [distance, duration]);
 
-  // Calculate calories (rough estimate: ~60 cal per km for running)
   useEffect(() => {
     const kmRun = distance / 1000;
     setCalories(Math.round(kmRun * 60));
@@ -76,7 +332,7 @@ export default function RunScreen() {
   };
 
   const calculateDistance = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
-    const R = 6371000; // Earth's radius in meters
+    const R = 6371000;
     const dLat = toRad(lat2 - lat1);
     const dLng = toRad(lng2 - lng1);
     const a =
@@ -84,7 +340,7 @@ export default function RunScreen() {
       Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
       Math.sin(dLng / 2) * Math.sin(dLng / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c; // returns meters
+    return R * c;
   };
 
   const toRad = (deg: number): number => deg * (Math.PI / 180);
@@ -98,15 +354,14 @@ export default function RunScreen() {
       accuracy: location.coords.accuracy,
     };
 
-    // Update GPS accuracy
+    setUserLocation({ lat: newPoint.lat, lng: newPoint.lng });
     setGpsAccuracy(location.coords.accuracy);
 
-    // Calculate current speed from GPS or from distance/time
     let speedKmH = 0;
     if (location.coords.speed !== null && location.coords.speed >= 0) {
-      speedKmH = location.coords.speed * 3.6; // m/s to km/h
+      speedKmH = location.coords.speed * 3.6;
     } else if (lastLocation.current) {
-      const timeDiff = (newPoint.timestamp - lastLocation.current.timestamp) / 1000; // seconds
+      const timeDiff = (newPoint.timestamp - lastLocation.current.timestamp) / 1000;
       if (timeDiff > 0) {
         const dist = calculateDistance(
           lastLocation.current.lat,
@@ -118,18 +373,14 @@ export default function RunScreen() {
       }
     }
 
-    // Filter out unrealistic speeds (> 50 km/h for running)
     if (speedKmH > 50) speedKmH = currentSpeed;
-    
     setCurrentSpeed(speedKmH);
 
-    // Update max speed
     if (speedKmH > maxSpeedRef.current) {
       maxSpeedRef.current = speedKmH;
       setMaxSpeed(speedKmH);
     }
 
-    // Calculate distance from last point
     if (lastLocation.current) {
       const dist = calculateDistance(
         lastLocation.current.lat,
@@ -138,8 +389,6 @@ export default function RunScreen() {
         newPoint.lng
       );
       
-      // Only add distance if it's reasonable (not GPS jump)
-      // and accuracy is good enough
       if (dist < 100 && (location.coords.accuracy === null || location.coords.accuracy < 50)) {
         distanceRef.current += dist;
         setDistance(distanceRef.current);
@@ -158,12 +407,10 @@ export default function RunScreen() {
         return;
       }
 
-      // Vibrate to indicate start
       if (Platform.OS !== 'web') {
         Vibration.vibrate(100);
       }
 
-      // Reset all values
       setIsRunning(true);
       setIsPaused(false);
       setDistance(0);
@@ -178,30 +425,26 @@ export default function RunScreen() {
       distanceRef.current = 0;
       maxSpeedRef.current = 0;
 
-      // Start timer
       timerRef.current = setInterval(() => {
         setDuration(d => d + 1);
       }, 1000);
 
-      // Start location tracking with high accuracy
       locationSubscription.current = await Location.watchPositionAsync(
         {
           accuracy: Location.Accuracy.BestForNavigation,
-          timeInterval: 1000, // Update every second
-          distanceInterval: 1, // Update every 1 meter
+          timeInterval: 1000,
+          distanceInterval: 2,
         },
         handleLocationUpdate
       );
     } catch (error) {
       console.error('Error starting tracking:', error);
-      Alert.alert('Xato', 'Kuzatishni boshlashda xato. Qaytadan urinib ko\'ring.');
+      Alert.alert('Xato', 'Kuzatishni boshlashda xato.');
     }
   };
 
   const pauseTracking = () => {
-    if (Platform.OS !== 'web') {
-      Vibration.vibrate(50);
-    }
+    if (Platform.OS !== 'web') Vibration.vibrate(50);
     setIsPaused(true);
     setCurrentSpeed(0);
     if (timerRef.current) {
@@ -215,35 +458,28 @@ export default function RunScreen() {
   };
 
   const resumeTracking = async () => {
-    if (Platform.OS !== 'web') {
-      Vibration.vibrate(50);
-    }
+    if (Platform.OS !== 'web') Vibration.vibrate(50);
     setIsPaused(false);
     
-    // Resume timer
     timerRef.current = setInterval(() => {
       setDuration(d => d + 1);
     }, 1000);
 
-    // Resume location tracking
     locationSubscription.current = await Location.watchPositionAsync(
       {
         accuracy: Location.Accuracy.BestForNavigation,
         timeInterval: 1000,
-        distanceInterval: 1,
+        distanceInterval: 2,
       },
       handleLocationUpdate
     );
   };
 
   const stopTracking = async () => {
-    if (Platform.OS !== 'web') {
-      Vibration.vibrate([100, 50, 100]);
-    }
+    if (Platform.OS !== 'web') Vibration.vibrate([100, 50, 100]);
     
     cleanupTracking();
 
-    // Save run if we have data
     if (isRunning && route.length > 0 && startTime && token) {
       try {
         const distanceKm = distance / 1000;
@@ -256,16 +492,15 @@ export default function RunScreen() {
         });
         await refreshUser();
         Alert.alert(
-          'Yugurish saqlandi!',
-          `Ajoyib! Siz ${formatDistance(distance)} masofani ${formatDuration(duration)} da bosib o'tdingiz.\n\nO'rtacha tezlik: ${avgSpeed.toFixed(1)} km/soat\nMax tezlik: ${maxSpeed.toFixed(1)} km/soat\nKaloriya: ~${calories} kcal`
+          'Yugurish saqlandi! ✓',
+          `Ajoyib! ${formatDistance(distance)} masofani ${formatDuration(duration)} da bosib o'tdingiz.\n\nYugurish yo'lingiz xaritada saqlandi!`
         );
       } catch (error) {
         console.error('Error saving run:', error);
-        Alert.alert('Xato', 'Yugurishni saqlashda xato. Qaytadan urinib ko\'ring.');
+        Alert.alert('Xato', 'Yugurishni saqlashda xato.');
       }
     }
 
-    // Reset state
     setIsRunning(false);
     setIsPaused(false);
     setDistance(0);
@@ -300,136 +535,115 @@ export default function RunScreen() {
     return `${(meters / 1000).toFixed(2)} km`;
   };
 
-  const calculatePace = (): string => {
-    const km = distance / 1000;
-    if (km <= 0) return '--:--';
-    const paceSeconds = duration / km; // seconds per km
-    const mins = Math.floor(paceSeconds / 60);
-    const secs = Math.floor(paceSeconds % 60);
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  const getGpsAccuracyColor = (): string => {
+  const getGpsColor = (): string => {
     if (gpsAccuracy === null) return '#5A7A9A';
-    if (gpsAccuracy <= 5) return '#4CAF50'; // Excellent
-    if (gpsAccuracy <= 10) return '#8BC34A'; // Good
-    if (gpsAccuracy <= 20) return '#FFEB3B'; // Fair
-    if (gpsAccuracy <= 50) return '#FF9800'; // Poor
-    return '#FF5722'; // Very poor
-  };
-
-  const getGpsAccuracyText = (): string => {
-    if (gpsAccuracy === null) return 'GPS kutilmoqda...';
-    if (gpsAccuracy <= 5) return 'A\'lo';
-    if (gpsAccuracy <= 10) return 'Yaxshi';
-    if (gpsAccuracy <= 20) return 'O\'rtacha';
-    if (gpsAccuracy <= 50) return 'Yomon';
-    return 'Juda yomon';
+    if (gpsAccuracy <= 5) return '#4CAF50';
+    if (gpsAccuracy <= 10) return '#8BC34A';
+    if (gpsAccuracy <= 20) return '#FFEB3B';
+    if (gpsAccuracy <= 50) return '#FF9800';
+    return '#FF5722';
   };
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.content}>
+        {/* Header */}
         <View style={styles.headerRow}>
           <Text style={styles.headerTitle}>Yugurish</Text>
-          {isRunning && (
-            <View style={styles.gpsIndicator}>
-              <View style={[styles.gpsDot, { backgroundColor: getGpsAccuracyColor() }]} />
-              <Text style={styles.gpsText}>{getGpsAccuracyText()}</Text>
+          <View style={styles.headerButtons}>
+            {isRunning && (
+              <View style={styles.gpsIndicator}>
+                <View style={[styles.gpsDot, { backgroundColor: getGpsColor() }]} />
+                <Text style={styles.gpsText}>{gpsAccuracy ? `${Math.round(gpsAccuracy)}m` : 'GPS'}</Text>
+              </View>
+            )}
+            <TouchableOpacity 
+              style={styles.mapToggle} 
+              onPress={() => setShowMap(!showMap)}
+            >
+              <Ionicons name={showMap ? "stats-chart" : "map"} size={20} color="#4DA6FF" />
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* Live Map */}
+        {showMap && (
+          <LiveMapWeb userLocation={userLocation} route={route} />
+        )}
+
+        {/* Stats */}
+        <View style={styles.statsRow}>
+          <View style={styles.mainStat}>
+            <Text style={styles.mainStatValue}>
+              {distance < 1000 ? Math.round(distance) : (distance / 1000).toFixed(2)}
+            </Text>
+            <Text style={styles.mainStatLabel}>{distance < 1000 ? 'metr' : 'km'}</Text>
+          </View>
+          <View style={styles.statDivider} />
+          <View style={styles.mainStat}>
+            <Text style={styles.mainStatValue}>{currentSpeed.toFixed(1)}</Text>
+            <Text style={styles.mainStatLabel}>km/soat</Text>
+          </View>
+          <View style={styles.statDivider} />
+          <View style={styles.mainStat}>
+            <Text style={styles.mainStatValue}>{formatDuration(duration)}</Text>
+            <Text style={styles.mainStatLabel}>vaqt</Text>
+          </View>
+        </View>
+
+        {/* Secondary Stats */}
+        {!showMap && (
+          <View style={styles.secondaryStats}>
+            <View style={styles.secondaryStat}>
+              <Ionicons name="trending-up" size={18} color="#FF9500" />
+              <Text style={styles.secondaryValue}>{maxSpeed.toFixed(1)}</Text>
+              <Text style={styles.secondaryLabel}>Max km/h</Text>
             </View>
-          )}
-        </View>
-
-        {/* Main Distance Display */}
-        <View style={styles.mainStatContainer}>
-          <Text style={styles.distanceValue}>
-            {distance < 1000 
-              ? Math.round(distance) 
-              : (distance / 1000).toFixed(2)
-            }
-          </Text>
-          <Text style={styles.distanceUnit}>
-            {distance < 1000 ? 'metr' : 'kilometr'}
-          </Text>
-        </View>
-
-        {/* Speed Display */}
-        <View style={styles.speedContainer}>
-          <View style={styles.speedBox}>
-            <Ionicons name="speedometer" size={28} color="#4DA6FF" />
-            <Text style={styles.speedValue}>{currentSpeed.toFixed(1)}</Text>
-            <Text style={styles.speedLabel}>km/soat</Text>
-            <Text style={styles.speedSubLabel}>Hozirgi tezlik</Text>
+            <View style={styles.secondaryStat}>
+              <Ionicons name="analytics" size={18} color="#4DA6FF" />
+              <Text style={styles.secondaryValue}>{avgSpeed.toFixed(1)}</Text>
+              <Text style={styles.secondaryLabel}>O'rtacha</Text>
+            </View>
+            <View style={styles.secondaryStat}>
+              <Ionicons name="flame" size={18} color="#FF6B6B" />
+              <Text style={styles.secondaryValue}>{calories}</Text>
+              <Text style={styles.secondaryLabel}>Kaloriya</Text>
+            </View>
           </View>
-          <View style={styles.speedDivider} />
-          <View style={styles.speedBox}>
-            <Ionicons name="trending-up" size={28} color="#FF9500" />
-            <Text style={styles.speedValue}>{maxSpeed.toFixed(1)}</Text>
-            <Text style={styles.speedLabel}>km/soat</Text>
-            <Text style={styles.speedSubLabel}>Max tezlik</Text>
-          </View>
-        </View>
-
-        {/* Stats Grid */}
-        <View style={styles.statsGrid}>
-          <View style={styles.statBox}>
-            <Ionicons name="time" size={22} color="#4DA6FF" />
-            <Text style={styles.statValue}>{formatDuration(duration)}</Text>
-            <Text style={styles.statLabel}>Vaqt</Text>
-          </View>
-          <View style={styles.statBox}>
-            <Ionicons name="walk" size={22} color="#4DA6FF" />
-            <Text style={styles.statValue}>{calculatePace()}</Text>
-            <Text style={styles.statLabel}>Tezlik (min/km)</Text>
-          </View>
-          <View style={styles.statBox}>
-            <Ionicons name="analytics" size={22} color="#4DA6FF" />
-            <Text style={styles.statValue}>{avgSpeed.toFixed(1)}</Text>
-            <Text style={styles.statLabel}>O'rtacha km/soat</Text>
-          </View>
-          <View style={styles.statBox}>
-            <Ionicons name="flame" size={22} color="#FF6B6B" />
-            <Text style={styles.statValue}>{calories}</Text>
-            <Text style={styles.statLabel}>Kaloriya</Text>
-          </View>
-        </View>
+        )}
 
         {/* Control Buttons */}
         <View style={styles.buttonContainer}>
           {!isRunning ? (
             <TouchableOpacity style={styles.startButton} onPress={startTracking}>
-              <Ionicons name="play" size={48} color="#fff" />
-              <Text style={styles.startButtonText}>BOSHLASH</Text>
+              <Ionicons name="play" size={40} color="#fff" />
+              <Text style={styles.buttonText}>BOSHLASH</Text>
             </TouchableOpacity>
+          ) : isPaused ? (
+            <View style={styles.controlButtons}>
+              <TouchableOpacity style={styles.resumeButton} onPress={resumeTracking}>
+                <Ionicons name="play" size={28} color="#fff" />
+                <Text style={styles.smallButtonText}>Davom</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.stopButton} onPress={stopTracking}>
+                <Ionicons name="stop" size={28} color="#fff" />
+                <Text style={styles.smallButtonText}>Tugatish</Text>
+              </TouchableOpacity>
+            </View>
           ) : (
-            <>
-              {isPaused ? (
-                <View style={styles.controlButtons}>
-                  <TouchableOpacity style={styles.resumeButton} onPress={resumeTracking}>
-                    <Ionicons name="play" size={32} color="#fff" />
-                    <Text style={styles.controlButtonText}>Davom</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.stopButton} onPress={stopTracking}>
-                    <Ionicons name="stop" size={32} color="#fff" />
-                    <Text style={styles.controlButtonText}>Tugatish</Text>
-                  </TouchableOpacity>
-                </View>
-              ) : (
-                <TouchableOpacity style={styles.pauseButton} onPress={pauseTracking}>
-                  <Ionicons name="pause" size={48} color="#fff" />
-                  <Text style={styles.pauseButtonText}>TO'XTATISH</Text>
-                </TouchableOpacity>
-              )}
-            </>
+            <TouchableOpacity style={styles.pauseButton} onPress={pauseTracking}>
+              <Ionicons name="pause" size={40} color="#fff" />
+              <Text style={styles.buttonText}>TO'XTATISH</Text>
+            </TouchableOpacity>
           )}
         </View>
 
-        {/* Tracking Status */}
+        {/* Status */}
         {isRunning && (
-          <View style={styles.trackingIndicator}>
-            <View style={[styles.trackingDot, isPaused && styles.trackingDotPaused]} />
-            <Text style={styles.trackingText}>
-              {isPaused ? 'To\'xtatildi' : `Kuzatilmoqda... (${route.length} nuqta)`}
+          <View style={styles.statusBar}>
+            <View style={[styles.statusDot, isPaused && styles.statusDotPaused]} />
+            <Text style={styles.statusText}>
+              {isPaused ? 'To\'xtatildi' : `Kuzatilmoqda • ${route.length} nuqta`}
             </Text>
           </View>
         )}
@@ -451,12 +665,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 12,
   },
   headerTitle: {
-    fontSize: 28,
+    fontSize: 26,
     fontWeight: 'bold',
     color: '#fff',
+  },
+  headerButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
   },
   gpsIndicator: {
     flexDirection: 'row',
@@ -467,87 +686,78 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   gpsDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
     marginRight: 6,
   },
   gpsText: {
     color: '#B8CDE8',
     fontSize: 12,
   },
-  mainStatContainer: {
-    alignItems: 'center',
-    marginBottom: 20,
+  mapToggle: {
+    backgroundColor: '#1A3A5C',
+    padding: 10,
+    borderRadius: 8,
   },
-  distanceValue: {
-    fontSize: 72,
-    fontWeight: 'bold',
-    color: '#4DA6FF',
-    lineHeight: 80,
+  mapContainer: {
+    height: 220,
+    borderRadius: 12,
+    overflow: 'hidden',
+    marginBottom: 12,
+    backgroundColor: '#E8E8E8',
   },
-  distanceUnit: {
-    fontSize: 20,
-    color: '#8BA4C4',
-    marginTop: 4,
+  webview: {
+    flex: 1,
   },
-  speedContainer: {
+  statsRow: {
     flexDirection: 'row',
     backgroundColor: '#1A3A5C',
-    borderRadius: 16,
+    borderRadius: 12,
     padding: 16,
-    marginBottom: 16,
+    marginBottom: 12,
   },
-  speedBox: {
+  mainStat: {
     flex: 1,
     alignItems: 'center',
   },
-  speedDivider: {
+  mainStatValue: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: '#4DA6FF',
+  },
+  mainStatLabel: {
+    fontSize: 12,
+    color: '#8BA4C4',
+    marginTop: 2,
+  },
+  statDivider: {
     width: 1,
     backgroundColor: '#2A4A6A',
     marginHorizontal: 12,
   },
-  speedValue: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginTop: 8,
-  },
-  speedLabel: {
-    fontSize: 14,
-    color: '#8BA4C4',
-    marginTop: 2,
-  },
-  speedSubLabel: {
-    fontSize: 11,
-    color: '#5A7A9A',
-    marginTop: 2,
-  },
-  statsGrid: {
+  secondaryStats: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
     gap: 10,
-    marginBottom: 20,
+    marginBottom: 12,
   },
-  statBox: {
+  secondaryStat: {
     flex: 1,
-    minWidth: '45%',
     backgroundColor: '#1A3A5C',
-    borderRadius: 12,
-    padding: 14,
+    borderRadius: 10,
+    padding: 12,
     alignItems: 'center',
   },
-  statValue: {
-    fontSize: 22,
+  secondaryValue: {
+    fontSize: 18,
     fontWeight: '600',
     color: '#fff',
-    marginTop: 6,
-  },
-  statLabel: {
-    fontSize: 11,
-    color: '#8BA4C4',
     marginTop: 4,
-    textAlign: 'center',
+  },
+  secondaryLabel: {
+    fontSize: 10,
+    color: '#8BA4C4',
+    marginTop: 2,
   },
   buttonContainer: {
     flex: 1,
@@ -555,82 +765,76 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   startButton: {
-    width: 160,
-    height: 160,
-    borderRadius: 80,
+    width: 140,
+    height: 140,
+    borderRadius: 70,
     backgroundColor: '#4DA6FF',
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#4DA6FF',
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.5,
-    shadowRadius: 20,
-    elevation: 10,
-  },
-  startButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
-    marginTop: 8,
+    shadowRadius: 15,
+    elevation: 8,
   },
   pauseButton: {
-    width: 160,
-    height: 160,
-    borderRadius: 80,
+    width: 140,
+    height: 140,
+    borderRadius: 70,
     backgroundColor: '#FF9500',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  pauseButtonText: {
+  buttonText: {
     color: '#fff',
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: 'bold',
-    marginTop: 8,
+    marginTop: 6,
   },
   controlButtons: {
     flexDirection: 'row',
-    gap: 20,
+    gap: 16,
   },
   resumeButton: {
-    width: 110,
-    height: 110,
-    borderRadius: 55,
+    width: 100,
+    height: 100,
+    borderRadius: 50,
     backgroundColor: '#4DA6FF',
     alignItems: 'center',
     justifyContent: 'center',
   },
   stopButton: {
-    width: 110,
-    height: 110,
-    borderRadius: 55,
+    width: 100,
+    height: 100,
+    borderRadius: 50,
     backgroundColor: '#FF6B6B',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  controlButtonText: {
+  smallButtonText: {
     color: '#fff',
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '600',
     marginTop: 4,
   },
-  trackingIndicator: {
+  statusBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 12,
+    paddingVertical: 10,
   },
-  trackingDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
+  statusDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
     backgroundColor: '#4DA6FF',
     marginRight: 8,
   },
-  trackingDotPaused: {
+  statusDotPaused: {
     backgroundColor: '#FF9500',
   },
-  trackingText: {
+  statusText: {
     color: '#8BA4C4',
-    fontSize: 14,
+    fontSize: 13,
   },
 });
