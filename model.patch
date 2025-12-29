@@ -1,0 +1,26 @@
+diff --git a/frontend/app/(tabs)/map.tsx b/frontend/app/(tabs)/map.tsx
+index 84498bf..208c4f2 100644
+--- a/frontend/app/(tabs)/map.tsx
++++ b/frontend/app/(tabs)/map.tsx
+@@ -111,8 +111,8 @@ function generateLeafletHTML(
+       attributionControl: false
+     }).setView([${userLocation.lat}, ${userLocation.lng}], 14);
+ 
+-    // Dark theme tiles from CartoDB
+-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
++    // White/Light theme tiles from OpenStreetMap
++    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+       maxZoom: 19
+     }).addTo(map);
+ 
+@@ -183,8 +183,8 @@ function LeafletWebMap({ userLocation, territories }: {
+         const L = (window as any).L;
+         const map = L.map('leaflet-map').setView([userLocation.lat, userLocation.lng], 14);
+ 
+-        // Dark theme tiles
+-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
++        // White/Light theme tiles from OpenStreetMap
++        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+           maxZoom: 19,
+           attribution: ''
+         }).addTo(map);
