@@ -422,6 +422,31 @@ const styles = StyleSheet.create({
     flex: 1,
     position: 'relative',
   },
+  staticMapContainer: {
+    flex: 1,
+    position: 'relative',
+  },
+  staticMapImage: {
+    width: '100%',
+    height: '100%',
+  },
+  mapTapOverlay: {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    transform: [{ translateX: -80 }, { translateY: -20 }],
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  mapTapText: {
+    color: '#fff',
+    fontSize: 14,
+    marginLeft: 8,
+  },
   webMapOverlay: {
     position: 'absolute',
     bottom: 100,
