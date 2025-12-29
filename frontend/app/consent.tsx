@@ -21,30 +21,58 @@ export default function ConsentScreen() {
 
   const requestPermissions = async () => {
     try {
-      // Request location permission
+      // On web, location permissions work differently
+      if (Platform.OS === 'web') {
+        // For web, we'll try to get permission but won't block if it fails
+        try {
+          const { status } = await Location.requestForegroundPermissionsAsync();
+          if (status === 'granted') {
+            setPermissionsGranted(true);
+          }
+          // Continue regardless on web - location features will be limited
+          return true;
+        } catch (webError) {
+          console.log('Web location permission not available:', webError);
+          // Continue anyway on web
+          return true;
+        }
+      }
+
+      // For native platforms (iOS/Android)
       const { status: locationStatus } = await Location.requestForegroundPermissionsAsync();
       
       if (locationStatus !== 'granted') {
+        // Show alert but allow user to continue - they can grant permission later
         Alert.alert(
-          'Permission Required',
-          'Location permission is required to track your running routes and territories.',
-          [{ text: 'OK' }]
+          'Location Permission',
+          'Location permission helps track your running routes. You can enable it later in settings.',
+          [
+            { text: 'Continue Anyway', onPress: () => {} },
+          ]
         );
-        return false;
+        // Still return true to allow continuing
+        return true;
       }
 
       // Request background location (optional for better tracking)
-      if (Platform.OS !== 'web') {
+      try {
         const { status: bgStatus } = await Location.requestBackgroundPermissionsAsync();
         // Background is optional, continue even if denied
+      } catch (bgError) {
+        console.log('Background location not available:', bgError);
       }
 
       setPermissionsGranted(true);
       return true;
     } catch (error) {
       console.error('Permission error:', error);
-      Alert.alert('Error', 'Failed to request permissions. Please try again.');
-      return false;
+      // Don't block user - let them continue
+      Alert.alert(
+        'Note',
+        'Some features may be limited without location permission. You can enable it later in settings.',
+        [{ text: 'OK' }]
+      );
+      return true;
     }
   };
 
