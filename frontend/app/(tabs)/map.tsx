@@ -54,35 +54,38 @@ const ROUTE_COLORS = [
   '#00BCD4', '#E91E63', '#FFEB3B', '#795548', '#607D8B',
 ];
 
-// Web Map Component using iframe
+// Web Map Component using Static Map Image
 function WebMapView({ userLocation, territories }: { userLocation: { lat: number; lng: number } | null; territories: Territory[] }) {
   const lat = userLocation?.lat || 41.2995;
   const lng = userLocation?.lng || 69.2401;
   
-  const mapUrl = `https://www.google.com/maps/embed/v1/view?key=${GOOGLE_MAPS_API_KEY}&center=${lat},${lng}&zoom=14&maptype=roadmap`;
+  // Static Map URL
+  const staticMapUrl = `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lng}&zoom=13&size=600x400&maptype=roadmap&key=${GOOGLE_MAPS_API_KEY}`;
+  
+  // Google Maps link for opening in browser
+  const googleMapsLink = `https://www.google.com/maps/@${lat},${lng},14z`;
 
   return (
     <View style={styles.webMapContainer}>
-      {Platform.OS === 'web' ? (
-        <View style={{ flex: 1, borderRadius: 12, overflow: 'hidden' }}>
-          <iframe
-            src={mapUrl}
-            style={{
-              width: '100%',
-              height: '100%',
-              border: 'none',
-            }}
-            allowFullScreen
-            loading="lazy"
-            referrerPolicy="no-referrer-when-downgrade"
-          />
+      <TouchableOpacity 
+        style={styles.staticMapContainer}
+        onPress={() => {
+          if (Platform.OS === 'web') {
+            window.open(googleMapsLink, '_blank');
+          }
+        }}
+      >
+        <Image 
+          source={{ uri: staticMapUrl }}
+          style={styles.staticMapImage}
+          resizeMode="cover"
+        />
+        <View style={styles.mapTapOverlay}>
+          <Ionicons name="expand" size={24} color="#fff" />
+          <Text style={styles.mapTapText}>Xaritani ochish uchun bosing</Text>
         </View>
-      ) : (
-        <View style={styles.mapFallback}>
-          <Ionicons name="map" size={64} color="#4DA6FF" />
-          <Text style={styles.mapFallbackText}>Xarita mobil ilovada ishlaydi</Text>
-        </View>
-      )}
+      </TouchableOpacity>
+      
       {/* Overlay with user info */}
       <View style={styles.webMapOverlay}>
         <Text style={styles.webMapOverlayTitle}>Xaritadagi foydalanuvchilar</Text>
