@@ -183,8 +183,8 @@ function LeafletWebMap({ userLocation, territories }: {
         const L = (window as any).L;
         const map = L.map('leaflet-map').setView([userLocation.lat, userLocation.lng], 14);
 
-        // Dark theme tiles
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        // White/Light theme tiles from OpenStreetMap
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
           maxZoom: 19,
           attribution: ''
         }).addTo(map);
