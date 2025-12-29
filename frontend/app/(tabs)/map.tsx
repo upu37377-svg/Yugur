@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -16,6 +16,25 @@ import { Ionicons } from '@expo/vector-icons';
 import axios from 'axios';
 
 const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
+const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+
+// Conditionally import MapView only for native platforms
+let MapView: any = null;
+let Marker: any = null;
+let Polyline: any = null;
+let PROVIDER_GOOGLE: any = null;
+
+if (Platform.OS !== 'web') {
+  try {
+    const Maps = require('react-native-maps');
+    MapView = Maps.default;
+    Marker = Maps.Marker;
+    Polyline = Maps.Polyline;
+    PROVIDER_GOOGLE = Maps.PROVIDER_GOOGLE;
+  } catch (e) {
+    console.log('react-native-maps not available');
+  }
+}
 
 interface Territory {
   user_id: string;
@@ -35,11 +54,148 @@ const ROUTE_COLORS = [
   '#00BCD4', '#E91E63', '#FFEB3B', '#795548', '#607D8B',
 ];
 
+// Web Map Component using iframe
+function WebMapView({ userLocation, territories }: { userLocation: { lat: number; lng: number } | null; territories: Territory[] }) {
+  const lat = userLocation?.lat || 41.2995;
+  const lng = userLocation?.lng || 69.2401;
+  
+  // Create markers for all users with runs
+  const markers = territories
+    .filter(t => t.runs.length > 0 && t.runs[0].route.length > 0)
+    .map((t, i) => {
+      const firstPoint = t.runs[0].route[0];
+      return `markers=color:blue%7Clabel:${t.user_name.charAt(0)}%7C${firstPoint.lat},${firstPoint.lng}`;
+    })
+    .join('&');
+
+  // Create path for routes
+  const paths = territories
+    .filter(t => t.runs.length > 0)
+    .map((t, i) => {
+      const color = ROUTE_COLORS[i % ROUTE_COLORS.length].replace('#', '0x');
+      return t.runs.map(run => {
+        if (run.route.length < 2) return '';
+        const pathPoints = run.route.map(p => `${p.lat},${p.lng}`).join('|');
+        return `path=color:${color}|weight:4|${pathPoints}`;
+      }).join('&');
+    })
+    .filter(p => p)
+    .join('&');
+
+  const mapUrl = `https://www.google.com/maps/embed/v1/view?key=${GOOGLE_MAPS_API_KEY}&center=${lat},${lng}&zoom=14&maptype=roadmap`;
+
+  return (
+    <View style={styles.webMapContainer}>
+      <iframe
+        src={mapUrl}
+        style={{
+          width: '100%',
+          height: '100%',
+          border: 'none',
+          borderRadius: 12,
+        }}
+        allowFullScreen
+        loading="lazy"
+        referrerPolicy="no-referrer-when-downgrade"
+      />
+      {/* Overlay with user info */}
+      <View style={styles.webMapOverlay}>
+        <Text style={styles.webMapOverlayTitle}>Users on Map</Text>
+        {territories.filter(t => t.runs.length > 0).slice(0, 3).map((t, i) => (
+          <View key={t.user_id} style={styles.webMapUser}>
+            <View style={[styles.colorDot, { backgroundColor: ROUTE_COLORS[i % ROUTE_COLORS.length] }]} />
+            <Text style={styles.webMapUserName}>{t.user_name}</Text>
+            <Text style={styles.webMapUserDistance}>{t.total_distance.toFixed(1)} km</Text>
+          </View>
+        ))}
+        {territories.filter(t => t.runs.length > 0).length === 0 && (
+          <Text style={styles.webMapNoData}>No running routes yet</Text>
+        )}
+      </View>
+    </View>
+  );
+}
+
+// Native Map Component
+function NativeMapView({ userLocation, territories, mapRef }: { 
+  userLocation: { lat: number; lng: number } | null; 
+  territories: Territory[];
+  mapRef: React.RefObject<any>;
+}) {
+  if (!MapView) {
+    return (
+      <View style={styles.mapFallback}>
+        <Ionicons name="map" size={64} color="#4DA6FF" />
+        <Text style={styles.mapFallbackText}>Map not available</Text>
+      </View>
+    );
+  }
+
+  const initialRegion = userLocation
+    ? {
+        latitude: userLocation.lat,
+        longitude: userLocation.lng,
+        latitudeDelta: 0.05,
+        longitudeDelta: 0.05,
+      }
+    : {
+        latitude: 41.2995,
+        longitude: 69.2401,
+        latitudeDelta: 0.1,
+        longitudeDelta: 0.1,
+      };
+
+  return (
+    <MapView
+      ref={mapRef}
+      style={styles.map}
+      provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
+      initialRegion={initialRegion}
+      showsUserLocation={true}
+      showsMyLocationButton={false}
+      customMapStyle={mapStyle}
+    >
+      {territories.map((territory, userIndex) =>
+        territory.runs.map((run) => (
+          <React.Fragment key={run.id}>
+            {run.route.length > 1 && Polyline && (
+              <Polyline
+                coordinates={run.route.map((point) => ({
+                  latitude: point.lat,
+                  longitude: point.lng,
+                }))}
+                strokeColor={ROUTE_COLORS[userIndex % ROUTE_COLORS.length]}
+                strokeWidth={4}
+              />
+            )}
+            {run.route.length > 0 && Marker && (
+              <Marker
+                coordinate={{
+                  latitude: run.route[0].lat,
+                  longitude: run.route[0].lng,
+                }}
+                title={territory.user_name}
+                description={`${territory.user_phone} - ${territory.total_distance.toFixed(2)} km`}
+              >
+                <View style={[styles.marker, { backgroundColor: ROUTE_COLORS[userIndex % ROUTE_COLORS.length] }]}>
+                  <Ionicons name="person" size={16} color="#fff" />
+                </View>
+              </Marker>
+            )}
+          </React.Fragment>
+        ))
+      )}
+    </MapView>
+  );
+}
+
 export default function MapScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [territories, setTerritories] = useState<Territory[]>([]);
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [showList, setShowList] = useState(false);
+  const mapRef = useRef<any>(null);
 
   useEffect(() => {
     loadData();
@@ -48,13 +204,19 @@ export default function MapScreen() {
   const loadData = async () => {
     try {
       // Get user location
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status === 'granted') {
-        const location = await Location.getCurrentPositionAsync({});
-        setUserLocation({
-          lat: location.coords.latitude,
-          lng: location.coords.longitude,
-        });
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === 'granted') {
+          const location = await Location.getCurrentPositionAsync({});
+          setUserLocation({
+            lat: location.coords.latitude,
+            lng: location.coords.longitude,
+          });
+        }
+      } catch (locError) {
+        console.log('Location error:', locError);
+        // Default to Tashkent
+        setUserLocation({ lat: 41.2995, lng: 69.2401 });
       }
 
       // Load territories
@@ -73,8 +235,15 @@ export default function MapScreen() {
     loadData();
   };
 
-  const getColorForUser = (index: number) => {
-    return ROUTE_COLORS[index % ROUTE_COLORS.length];
+  const centerOnUser = () => {
+    if (userLocation && mapRef.current) {
+      mapRef.current.animateToRegion({
+        latitude: userLocation.lat,
+        longitude: userLocation.lng,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      });
+    }
   };
 
   const totalRuns = territories.reduce((sum, t) => sum + t.runs.length, 0);
@@ -85,137 +254,163 @@ export default function MapScreen() {
       <SafeAreaView style={styles.container}>
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#4DA6FF" />
-          <Text style={styles.loadingText}>Loading territories...</Text>
+          <Text style={styles.loadingText}>Xarita yuklanmoqda...</Text>
         </View>
       </SafeAreaView>
     );
   }
 
-  // Web/List View - Shows territories as a list since react-native-maps doesn't work well on web
+  // Show list view
+  if (showList) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#4DA6FF" />
+          }
+        >
+          <View style={styles.headerRow}>
+            <Text style={styles.headerTitle}>Hududlar</Text>
+            <TouchableOpacity style={styles.viewToggle} onPress={() => setShowList(false)}>
+              <Ionicons name="map" size={20} color="#4DA6FF" />
+              <Text style={styles.viewToggleText}>Xarita</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.statsCard}>
+            <View style={styles.statItem}>
+              <Ionicons name="people" size={28} color="#4DA6FF" />
+              <Text style={styles.statValue}>{territories.length}</Text>
+              <Text style={styles.statLabel}>Foydalanuvchilar</Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statItem}>
+              <Ionicons name="fitness" size={28} color="#4DA6FF" />
+              <Text style={styles.statValue}>{totalRuns}</Text>
+              <Text style={styles.statLabel}>Yugurishlar</Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statItem}>
+              <Ionicons name="map" size={28} color="#4DA6FF" />
+              <Text style={styles.statValue}>{totalDistance.toFixed(1)}</Text>
+              <Text style={styles.statLabel}>Jami km</Text>
+            </View>
+          </View>
+
+          <Text style={styles.sectionTitle}>Faol yuguruvchilar</Text>
+
+          {territories.filter(t => t.runs.length > 0).length === 0 ? (
+            <View style={styles.emptyCard}>
+              <Ionicons name="walk" size={64} color="#2A4A6A" />
+              <Text style={styles.emptyText}>Hali yugurish yo'llari yo'q</Text>
+              <Text style={styles.emptySubtext}>Hududingizni egallash uchun yuguring!</Text>
+            </View>
+          ) : (
+            territories.filter(t => t.runs.length > 0).map((territory, index) => (
+              <View key={territory.user_id} style={styles.territoryCard}>
+                <View style={styles.territoryHeader}>
+                  <View style={[styles.colorDot, { backgroundColor: ROUTE_COLORS[index % ROUTE_COLORS.length] }]} />
+                  {territory.user_avatar ? (
+                    <Image source={{ uri: territory.user_avatar }} style={styles.avatar} />
+                  ) : (
+                    <View style={styles.avatarPlaceholder}>
+                      <Ionicons name="person" size={16} color="#5A7A9A" />
+                    </View>
+                  )}
+                  <View style={styles.territoryInfo}>
+                    <Text style={styles.territoryName}>{territory.user_name}</Text>
+                    <Text style={styles.territoryPhone}>{territory.user_phone}</Text>
+                  </View>
+                  <View style={styles.territoryStats}>
+                    <Text style={styles.distanceValue}>{territory.total_distance.toFixed(2)} km</Text>
+                    <Text style={styles.runsCount}>{territory.runs.length} yugurish</Text>
+                  </View>
+                </View>
+              </View>
+            ))
+          )}
+
+          <Text style={styles.sectionTitle}>Barcha foydalanuvchilar</Text>
+          {territories.filter(t => t.runs.length === 0).map((territory) => (
+            <View key={territory.user_id} style={styles.userCard}>
+              {territory.user_avatar ? (
+                <Image source={{ uri: territory.user_avatar }} style={styles.smallAvatar} />
+              ) : (
+                <View style={styles.smallAvatarPlaceholder}>
+                  <Ionicons name="person" size={14} color="#5A7A9A" />
+                </View>
+              )}
+              <View style={styles.userInfo}>
+                <Text style={styles.userName}>{territory.user_name}</Text>
+                <Text style={styles.userPhone}>{territory.user_phone}</Text>
+              </View>
+              <View style={styles.noRunsBadge}>
+                <Text style={styles.noRunsText}>Yugurish yo'q</Text>
+              </View>
+            </View>
+          ))}
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  // Show map view
   return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor="#4DA6FF"
-          />
-        }
-      >
-        <Text style={styles.headerTitle}>Territories Map</Text>
+    <View style={styles.container}>
+      {Platform.OS === 'web' ? (
+        <WebMapView userLocation={userLocation} territories={territories} />
+      ) : (
+        <NativeMapView userLocation={userLocation} territories={territories} mapRef={mapRef} />
+      )}
 
-        {Platform.OS === 'web' && (
-          <View style={styles.webNotice}>
-            <Ionicons name="information-circle" size={20} color="#4DA6FF" />
-            <Text style={styles.webNoticeText}>
-              Full map view available on mobile app. Showing territory list below.
-            </Text>
-          </View>
-        )}
-
-        <View style={styles.statsCard}>
-          <View style={styles.statItem}>
-            <Ionicons name="people" size={28} color="#4DA6FF" />
-            <Text style={styles.statValue}>{territories.length}</Text>
-            <Text style={styles.statLabel}>Users</Text>
-          </View>
-          <View style={styles.statDivider} />
-          <View style={styles.statItem}>
-            <Ionicons name="fitness" size={28} color="#4DA6FF" />
-            <Text style={styles.statValue}>{totalRuns}</Text>
-            <Text style={styles.statLabel}>Runs</Text>
-          </View>
-          <View style={styles.statDivider} />
-          <View style={styles.statItem}>
-            <Ionicons name="map" size={28} color="#4DA6FF" />
-            <Text style={styles.statValue}>{totalDistance.toFixed(1)}</Text>
-            <Text style={styles.statLabel}>Total km</Text>
-          </View>
+      <SafeAreaView style={styles.overlay} pointerEvents="box-none">
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>Hududlar xaritasi</Text>
+          <TouchableOpacity style={styles.viewToggle} onPress={() => setShowList(true)}>
+            <Ionicons name="list" size={20} color="#4DA6FF" />
+            <Text style={styles.viewToggleText}>Ro'yxat</Text>
+          </TouchableOpacity>
         </View>
 
-        {userLocation && (
-          <View style={styles.locationCard}>
-            <Ionicons name="locate" size={20} color="#4DA6FF" />
-            <Text style={styles.locationText}>
-              Your location: {userLocation.lat.toFixed(4)}, {userLocation.lng.toFixed(4)}
-            </Text>
-          </View>
-        )}
-
-        <Text style={styles.sectionTitle}>Active Runners</Text>
-
-        {territories.filter(t => t.runs.length > 0).length === 0 ? (
-          <View style={styles.emptyCard}>
-            <Ionicons name="walk" size={64} color="#2A4A6A" />
-            <Text style={styles.emptyText}>No running routes yet</Text>
-            <Text style={styles.emptySubtext}>Start running to claim your territory!</Text>
-          </View>
-        ) : (
-          territories.filter(t => t.runs.length > 0).map((territory, index) => (
-            <View key={territory.user_id} style={styles.territoryCard}>
-              <View style={styles.territoryHeader}>
-                <View style={[styles.colorDot, { backgroundColor: getColorForUser(index) }]} />
-                {territory.user_avatar ? (
-                  <Image source={{ uri: territory.user_avatar }} style={styles.avatar} />
-                ) : (
-                  <View style={styles.avatarPlaceholder}>
-                    <Ionicons name="person" size={16} color="#5A7A9A" />
-                  </View>
-                )}
-                <View style={styles.territoryInfo}>
-                  <Text style={styles.territoryName}>{territory.user_name}</Text>
-                  <Text style={styles.territoryPhone}>{territory.user_phone}</Text>
-                </View>
-                <View style={styles.territoryStats}>
-                  <Text style={styles.distanceValue}>{territory.total_distance.toFixed(2)} km</Text>
-                  <Text style={styles.runsCount}>{territory.runs.length} runs</Text>
-                </View>
-              </View>
-              
-              {territory.runs.slice(0, 3).map((run, runIndex) => (
-                <View key={run.id} style={styles.runPreview}>
-                  <View style={styles.runDot} />
-                  <Text style={styles.runDistance}>{run.distance.toFixed(2)} km</Text>
-                  {run.route.length > 0 && (
-                    <Text style={styles.runLocation}>
-                      Start: {run.route[0].lat.toFixed(4)}, {run.route[0].lng.toFixed(4)}
-                    </Text>
-                  )}
-                </View>
-              ))}
-              {territory.runs.length > 3 && (
-                <Text style={styles.moreRuns}>+{territory.runs.length - 3} more runs</Text>
-              )}
+        <View style={styles.legendCard}>
+          <Text style={styles.legendTitle}>Faol yuguruvchilar</Text>
+          {territories.filter(t => t.runs.length > 0).slice(0, 5).map((territory, index) => (
+            <View key={territory.user_id} style={styles.legendItem}>
+              <View style={[styles.legendDot, { backgroundColor: ROUTE_COLORS[index % ROUTE_COLORS.length] }]} />
+              <Text style={styles.legendName} numberOfLines={1}>{territory.user_name}</Text>
+              <Text style={styles.legendDistance}>{territory.total_distance.toFixed(1)} km</Text>
             </View>
-          ))
-        )}
+          ))}
+          {territories.filter(t => t.runs.length > 0).length === 0 && (
+            <Text style={styles.emptyLegendText}>Hali yugurish ma'lumotlari yo'q</Text>
+          )}
+        </View>
+      </SafeAreaView>
 
-        <Text style={styles.sectionTitle}>All Users</Text>
+      {Platform.OS !== 'web' && (
+        <>
+          <TouchableOpacity style={styles.locationButton} onPress={centerOnUser}>
+            <Ionicons name="locate" size={24} color="#4DA6FF" />
+          </TouchableOpacity>
 
-        {territories.filter(t => t.runs.length === 0).map((territory, index) => (
-          <View key={territory.user_id} style={styles.userCard}>
-            {territory.user_avatar ? (
-              <Image source={{ uri: territory.user_avatar }} style={styles.smallAvatar} />
-            ) : (
-              <View style={styles.smallAvatarPlaceholder}>
-                <Ionicons name="person" size={14} color="#5A7A9A" />
-              </View>
-            )}
-            <View style={styles.userInfo}>
-              <Text style={styles.userName}>{territory.user_name}</Text>
-              <Text style={styles.userPhone}>{territory.user_phone}</Text>
-            </View>
-            <View style={styles.noRunsBadge}>
-              <Text style={styles.noRunsText}>No runs yet</Text>
-            </View>
-          </View>
-        ))}
-      </ScrollView>
-    </SafeAreaView>
+          <TouchableOpacity style={styles.refreshButton} onPress={onRefresh}>
+            <Ionicons name="refresh" size={24} color="#4DA6FF" />
+          </TouchableOpacity>
+        </>
+      )}
+    </View>
   );
 }
+
+const mapStyle = [
+  { elementType: 'geometry', stylers: [{ color: '#1d2c4d' }] },
+  { elementType: 'labels.text.fill', stylers: [{ color: '#8ec3b9' }] },
+  { elementType: 'labels.text.stroke', stylers: [{ color: '#1a3646' }] },
+  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#304a7d' }] },
+  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#255763' }] },
+  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#0e1626' }] },
+];
 
 const styles = StyleSheet.create({
   container: {
@@ -232,28 +427,171 @@ const styles = StyleSheet.create({
     marginTop: 16,
     fontSize: 16,
   },
-  scrollContent: {
-    padding: 20,
+  map: {
+    flex: 1,
   },
-  headerTitle: {
-    fontSize: 28,
-    fontWeight: 'bold',
+  webMapContainer: {
+    flex: 1,
+    position: 'relative',
+  },
+  webMapOverlay: {
+    position: 'absolute',
+    bottom: 100,
+    left: 16,
+    right: 16,
+    backgroundColor: 'rgba(26, 58, 92, 0.95)',
+    borderRadius: 12,
+    padding: 16,
+  },
+  webMapOverlayTitle: {
+    fontSize: 14,
+    fontWeight: '600',
     color: '#fff',
-    marginBottom: 16,
+    marginBottom: 10,
   },
-  webNotice: {
+  webMapUser: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(77, 166, 255, 0.1)',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 16,
+    marginBottom: 6,
   },
-  webNoticeText: {
-    color: '#8BA4C4',
+  webMapUserName: {
+    flex: 1,
+    color: '#B8CDE8',
     fontSize: 13,
     marginLeft: 8,
+  },
+  webMapUserDistance: {
+    color: '#4DA6FF',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  webMapNoData: {
+    color: '#5A7A9A',
+    fontSize: 13,
+    fontStyle: 'italic',
+  },
+  mapFallback: {
     flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  mapFallbackText: {
+    color: '#8BA4C4',
+    marginTop: 16,
+    fontSize: 16,
+  },
+  overlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: 'rgba(15, 39, 68, 0.9)',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    marginTop: Platform.OS === 'android' ? 40 : 0,
+  },
+  headerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  headerTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#fff',
+  },
+  viewToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1A3A5C',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  viewToggleText: {
+    color: '#4DA6FF',
+    marginLeft: 6,
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  legendCard: {
+    backgroundColor: 'rgba(26, 58, 92, 0.95)',
+    margin: 16,
+    borderRadius: 12,
+    padding: 16,
+  },
+  legendTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#8BA4C4',
+    marginBottom: 12,
+  },
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  legendDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    marginRight: 10,
+  },
+  legendName: {
+    flex: 1,
+    color: '#fff',
+    fontSize: 14,
+  },
+  legendDistance: {
+    color: '#8BA4C4',
+    fontSize: 12,
+  },
+  emptyLegendText: {
+    color: '#5A7A9A',
+    fontSize: 14,
+    fontStyle: 'italic',
+  },
+  marker: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
+  locationButton: {
+    position: 'absolute',
+    bottom: 100,
+    right: 16,
+    backgroundColor: '#1A3A5C',
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 5,
+  },
+  refreshButton: {
+    position: 'absolute',
+    bottom: 160,
+    right: 16,
+    backgroundColor: '#1A3A5C',
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 5,
+  },
+  scrollContent: {
+    padding: 20,
   },
   statsCard: {
     flexDirection: 'row',
@@ -280,19 +618,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#8BA4C4',
     marginTop: 4,
-  },
-  locationCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#1A3A5C',
-    padding: 12,
-    borderRadius: 12,
-    marginBottom: 20,
-  },
-  locationText: {
-    color: '#B8CDE8',
-    fontSize: 13,
-    marginLeft: 10,
   },
   sectionTitle: {
     fontSize: 18,
@@ -373,36 +698,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#8BA4C4',
     marginTop: 2,
-  },
-  runPreview: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 12,
-    paddingLeft: 22,
-  },
-  runDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#4DA6FF',
-    marginRight: 10,
-  },
-  runDistance: {
-    color: '#B8CDE8',
-    fontSize: 13,
-    fontWeight: '500',
-  },
-  runLocation: {
-    color: '#5A7A9A',
-    fontSize: 11,
-    marginLeft: 12,
-  },
-  moreRuns: {
-    color: '#5A7A9A',
-    fontSize: 12,
-    marginTop: 8,
-    paddingLeft: 22,
-    fontStyle: 'italic',
   },
   userCard: {
     backgroundColor: '#1A3A5C',
