@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -14,27 +14,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
 import axios from 'axios';
+import { WebView } from 'react-native-webview';
 
 const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
-const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
-
-// Conditionally import MapView only for native platforms
-let MapView: any = null;
-let Marker: any = null;
-let Polyline: any = null;
-let PROVIDER_GOOGLE: any = null;
-
-if (Platform.OS !== 'web') {
-  try {
-    const Maps = require('react-native-maps');
-    MapView = Maps.default;
-    Marker = Maps.Marker;
-    Polyline = Maps.Polyline;
-    PROVIDER_GOOGLE = Maps.PROVIDER_GOOGLE;
-  } catch (e) {
-    console.log('react-native-maps not available');
-  }
-}
 
 interface Territory {
   user_id: string;
@@ -54,129 +36,250 @@ const ROUTE_COLORS = [
   '#00BCD4', '#E91E63', '#FFEB3B', '#795548', '#607D8B',
 ];
 
-// Web Map Component using OpenStreetMap Static Tiles
-function WebMapView({ userLocation, territories }: { userLocation: { lat: number; lng: number } | null; territories: Territory[] }) {
-  const lat = userLocation?.lat || 41.2995;
-  const lng = userLocation?.lng || 69.2401;
-  
-  // OpenStreetMap static tile URL (free, no API key needed)
-  const zoom = 13;
-  const osmTileUrl = `https://tile.openstreetmap.org/${zoom}/${Math.floor((lng + 180) / 360 * Math.pow(2, zoom))}/${Math.floor((1 - Math.log(Math.tan(lat * Math.PI / 180) + 1 / Math.cos(lat * Math.PI / 180)) / Math.PI) / 2 * Math.pow(2, zoom))}.png`;
-  
-  // Google Maps link for opening in browser
-  const googleMapsLink = `https://www.google.com/maps/@${lat},${lng},14z`;
-
-  return (
-    <View style={styles.webMapContainer}>
-      <View style={styles.staticMapContainer}>
-        {/* Background color as map placeholder */}
-        <View style={styles.mapPlaceholder}>
-          <Ionicons name="map" size={80} color="#4DA6FF" />
-          <Text style={styles.mapPlaceholderTitle}>Toshkent, O'zbekiston</Text>
-          <Text style={styles.mapPlaceholderCoords}>{lat.toFixed(4)}, {lng.toFixed(4)}</Text>
+// Generate Leaflet HTML for WebView
+function generateLeafletHTML(
+  userLocation: { lat: number; lng: number },
+  territories: Territory[]
+): string {
+  const markers = territories
+    .filter(t => t.runs.length > 0)
+    .map((t, i) => {
+      const runs = t.runs.map((run, runIndex) => {
+        if (run.route.length === 0) return '';
+        
+        const polylinePoints = run.route.map(p => `[${p.lat}, ${p.lng}]`).join(',');
+        const color = ROUTE_COLORS[i % ROUTE_COLORS.length];
+        
+        const markerPoint = run.route[0];
+        return `
+          // Polyline for run
+          L.polyline([${polylinePoints}], {
+            color: '${color}',
+            weight: 4,
+            opacity: 0.8
+          }).addTo(map);
           
-          <TouchableOpacity 
-            style={styles.openMapButton}
-            onPress={() => {
-              if (Platform.OS === 'web') {
-                window.open(googleMapsLink, '_blank');
-              }
-            }}
-          >
-            <Ionicons name="open-outline" size={20} color="#fff" />
-            <Text style={styles.openMapButtonText}>Google Xaritada ochish</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
+          // Marker at start
+          L.circleMarker([${markerPoint.lat}, ${markerPoint.lng}], {
+            radius: 10,
+            fillColor: '${color}',
+            color: '#fff',
+            weight: 2,
+            opacity: 1,
+            fillOpacity: 0.9
+          }).addTo(map).bindPopup('<b>${t.user_name}</b><br>${t.user_phone}<br>${t.total_distance.toFixed(2)} km');
+        `;
+      }).join('\n');
       
-      {/* Overlay with user info */}
-      <View style={styles.webMapOverlay}>
-        <Text style={styles.webMapOverlayTitle}>Xaritadagi foydalanuvchilar</Text>
-        {territories.filter(t => t.runs.length > 0).slice(0, 3).map((t, i) => (
-          <View key={t.user_id} style={styles.webMapUser}>
-            <View style={[styles.colorDot, { backgroundColor: ROUTE_COLORS[i % ROUTE_COLORS.length] }]} />
-            <Text style={styles.webMapUserName}>{t.user_name}</Text>
-            <Text style={styles.webMapUserDistance}>{t.total_distance.toFixed(1)} km</Text>
-          </View>
-        ))}
-        {territories.filter(t => t.runs.length > 0).length === 0 && (
-          <Text style={styles.webMapNoData}>Hali yugurish yo'llari yo'q</Text>
-        )}
-      </View>
-    </View>
-  );
+      return runs;
+    }).join('\n');
+
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; width: 100%; }
+    #map { height: 100%; width: 100%; }
+    .leaflet-control-attribution { display: none; }
+    .custom-popup .leaflet-popup-content-wrapper {
+      background: #1A3A5C;
+      color: #fff;
+      border-radius: 8px;
+    }
+    .custom-popup .leaflet-popup-tip {
+      background: #1A3A5C;
+    }
+    .leaflet-popup-content {
+      margin: 10px 12px;
+    }
+    .leaflet-popup-content b {
+      color: #4DA6FF;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <script>
+    var map = L.map('map', {
+      zoomControl: true,
+      attributionControl: false
+    }).setView([${userLocation.lat}, ${userLocation.lng}], 14);
+
+    // Dark theme tiles from CartoDB
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      maxZoom: 19
+    }).addTo(map);
+
+    // User location marker
+    L.circleMarker([${userLocation.lat}, ${userLocation.lng}], {
+      radius: 8,
+      fillColor: '#4DA6FF',
+      color: '#fff',
+      weight: 3,
+      opacity: 1,
+      fillOpacity: 1
+    }).addTo(map).bindPopup('<b>Sizning joylashuvingiz</b>');
+
+    // Add pulse animation for user location
+    L.circleMarker([${userLocation.lat}, ${userLocation.lng}], {
+      radius: 20,
+      fillColor: '#4DA6FF',
+      color: '#4DA6FF',
+      weight: 1,
+      opacity: 0.3,
+      fillOpacity: 0.2
+    }).addTo(map);
+
+    ${markers}
+  </script>
+</body>
+</html>
+  `;
 }
 
-// Native Map Component
-function NativeMapView({ userLocation, territories, mapRef }: { 
-  userLocation: { lat: number; lng: number } | null; 
-  territories: Territory[];
-  mapRef: React.RefObject<any>;
+// Leaflet Map Component for Web
+function LeafletWebMap({ userLocation, territories }: { 
+  userLocation: { lat: number; lng: number }; 
+  territories: Territory[] 
 }) {
-  if (!MapView) {
+  const [mapLoaded, setMapLoaded] = useState(false);
+
+  useEffect(() => {
+    // Dynamically load Leaflet CSS and JS for web
+    if (Platform.OS === 'web') {
+      const linkEl = document.createElement('link');
+      linkEl.rel = 'stylesheet';
+      linkEl.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+      document.head.appendChild(linkEl);
+
+      const scriptEl = document.createElement('script');
+      scriptEl.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+      scriptEl.onload = () => setMapLoaded(true);
+      document.head.appendChild(scriptEl);
+
+      return () => {
+        document.head.removeChild(linkEl);
+        document.head.removeChild(scriptEl);
+      };
+    }
+  }, []);
+
+  useEffect(() => {
+    if (Platform.OS === 'web' && mapLoaded && (window as any).L) {
+      const mapContainer = document.getElementById('leaflet-map-container');
+      if (mapContainer && !mapContainer.hasChildNodes()) {
+        const mapDiv = document.createElement('div');
+        mapDiv.id = 'leaflet-map';
+        mapDiv.style.width = '100%';
+        mapDiv.style.height = '100%';
+        mapContainer.appendChild(mapDiv);
+
+        const L = (window as any).L;
+        const map = L.map('leaflet-map').setView([userLocation.lat, userLocation.lng], 14);
+
+        // Dark theme tiles
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+          maxZoom: 19,
+          attribution: ''
+        }).addTo(map);
+
+        // User location marker
+        L.circleMarker([userLocation.lat, userLocation.lng], {
+          radius: 8,
+          fillColor: '#4DA6FF',
+          color: '#fff',
+          weight: 3,
+          opacity: 1,
+          fillOpacity: 1
+        }).addTo(map).bindPopup('<b>Sizning joylashuvingiz</b>');
+
+        // Pulse effect
+        L.circleMarker([userLocation.lat, userLocation.lng], {
+          radius: 20,
+          fillColor: '#4DA6FF',
+          color: '#4DA6FF',
+          weight: 1,
+          opacity: 0.3,
+          fillOpacity: 0.2
+        }).addTo(map);
+
+        // Add territories
+        territories.forEach((territory, i) => {
+          territory.runs.forEach(run => {
+            if (run.route.length > 0) {
+              const color = ROUTE_COLORS[i % ROUTE_COLORS.length];
+              
+              // Polyline
+              if (run.route.length > 1) {
+                const latLngs = run.route.map(p => [p.lat, p.lng]);
+                L.polyline(latLngs, {
+                  color: color,
+                  weight: 4,
+                  opacity: 0.8
+                }).addTo(map);
+              }
+
+              // Marker
+              L.circleMarker([run.route[0].lat, run.route[0].lng], {
+                radius: 10,
+                fillColor: color,
+                color: '#fff',
+                weight: 2,
+                opacity: 1,
+                fillOpacity: 0.9
+              }).addTo(map).bindPopup(
+                `<b style="color: ${color}">${territory.user_name}</b><br>` +
+                `${territory.user_phone}<br>` +
+                `<span style="color: #4DA6FF">${territory.total_distance.toFixed(2)} km</span>`
+              );
+            }
+          });
+        });
+      }
+    }
+  }, [mapLoaded, userLocation, territories]);
+
+  if (Platform.OS === 'web') {
     return (
-      <View style={styles.mapFallback}>
-        <Ionicons name="map" size={64} color="#4DA6FF" />
-        <Text style={styles.mapFallbackText}>Map not available</Text>
+      <View style={styles.leafletContainer}>
+        <div 
+          id="leaflet-map-container" 
+          style={{ width: '100%', height: '100%', backgroundColor: '#0F2744' }}
+        />
+        {!mapLoaded && (
+          <View style={styles.mapLoading}>
+            <ActivityIndicator size="large" color="#4DA6FF" />
+            <Text style={styles.mapLoadingText}>Xarita yuklanmoqda...</Text>
+          </View>
+        )}
       </View>
     );
   }
 
-  const initialRegion = userLocation
-    ? {
-        latitude: userLocation.lat,
-        longitude: userLocation.lng,
-        latitudeDelta: 0.05,
-        longitudeDelta: 0.05,
-      }
-    : {
-        latitude: 41.2995,
-        longitude: 69.2401,
-        latitudeDelta: 0.1,
-        longitudeDelta: 0.1,
-      };
-
+  // For native platforms, use WebView with Leaflet HTML
+  const htmlContent = generateLeafletHTML(userLocation, territories);
+  
   return (
-    <MapView
-      ref={mapRef}
-      style={styles.map}
-      provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
-      initialRegion={initialRegion}
-      showsUserLocation={true}
-      showsMyLocationButton={false}
-      customMapStyle={mapStyle}
-    >
-      {territories.map((territory, userIndex) =>
-        territory.runs.map((run) => (
-          <React.Fragment key={run.id}>
-            {run.route.length > 1 && Polyline && (
-              <Polyline
-                coordinates={run.route.map((point) => ({
-                  latitude: point.lat,
-                  longitude: point.lng,
-                }))}
-                strokeColor={ROUTE_COLORS[userIndex % ROUTE_COLORS.length]}
-                strokeWidth={4}
-              />
-            )}
-            {run.route.length > 0 && Marker && (
-              <Marker
-                coordinate={{
-                  latitude: run.route[0].lat,
-                  longitude: run.route[0].lng,
-                }}
-                title={territory.user_name}
-                description={`${territory.user_phone} - ${territory.total_distance.toFixed(2)} km`}
-              >
-                <View style={[styles.marker, { backgroundColor: ROUTE_COLORS[userIndex % ROUTE_COLORS.length] }]}>
-                  <Ionicons name="person" size={16} color="#fff" />
-                </View>
-              </Marker>
-            )}
-          </React.Fragment>
-        ))
+    <WebView
+      style={styles.webview}
+      originWhitelist={['*']}
+      source={{ html: htmlContent }}
+      javaScriptEnabled={true}
+      domStorageEnabled={true}
+      startInLoadingState={true}
+      renderLoading={() => (
+        <View style={styles.mapLoading}>
+          <ActivityIndicator size="large" color="#4DA6FF" />
+          <Text style={styles.mapLoadingText}>Xarita yuklanmoqda...</Text>
+        </View>
       )}
-    </MapView>
+    />
   );
 }
 
@@ -184,9 +287,8 @@ export default function MapScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [territories, setTerritories] = useState<Territory[]>([]);
-  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number }>({ lat: 41.2995, lng: 69.2401 });
   const [showList, setShowList] = useState(false);
-  const mapRef = useRef<any>(null);
 
   useEffect(() => {
     loadData();
@@ -206,8 +308,6 @@ export default function MapScreen() {
         }
       } catch (locError) {
         console.log('Location error:', locError);
-        // Default to Tashkent
-        setUserLocation({ lat: 41.2995, lng: 69.2401 });
       }
 
       // Load territories
@@ -224,17 +324,6 @@ export default function MapScreen() {
   const onRefresh = () => {
     setRefreshing(true);
     loadData();
-  };
-
-  const centerOnUser = () => {
-    if (userLocation && mapRef.current) {
-      mapRef.current.animateToRegion({
-        latitude: userLocation.lat,
-        longitude: userLocation.lng,
-        latitudeDelta: 0.01,
-        longitudeDelta: 0.01,
-      });
-    }
   };
 
   const totalRuns = territories.reduce((sum, t) => sum + t.runs.length, 0);
@@ -349,11 +438,7 @@ export default function MapScreen() {
   // Show map view
   return (
     <View style={styles.container}>
-      {Platform.OS === 'web' ? (
-        <WebMapView userLocation={userLocation} territories={territories} />
-      ) : (
-        <NativeMapView userLocation={userLocation} territories={territories} mapRef={mapRef} />
-      )}
+      <LeafletWebMap userLocation={userLocation} territories={territories} />
 
       <SafeAreaView style={styles.overlay} pointerEvents="box-none">
         <View style={styles.header}>
@@ -365,7 +450,7 @@ export default function MapScreen() {
         </View>
 
         <View style={styles.legendCard}>
-          <Text style={styles.legendTitle}>Faol yuguruvchilar</Text>
+          <Text style={styles.legendTitle}>Xaritadagi foydalanuvchilar</Text>
           {territories.filter(t => t.runs.length > 0).slice(0, 5).map((territory, index) => (
             <View key={territory.user_id} style={styles.legendItem}>
               <View style={[styles.legendDot, { backgroundColor: ROUTE_COLORS[index % ROUTE_COLORS.length] }]} />
@@ -379,29 +464,12 @@ export default function MapScreen() {
         </View>
       </SafeAreaView>
 
-      {Platform.OS !== 'web' && (
-        <>
-          <TouchableOpacity style={styles.locationButton} onPress={centerOnUser}>
-            <Ionicons name="locate" size={24} color="#4DA6FF" />
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.refreshButton} onPress={onRefresh}>
-            <Ionicons name="refresh" size={24} color="#4DA6FF" />
-          </TouchableOpacity>
-        </>
-      )}
+      <TouchableOpacity style={styles.refreshButton} onPress={onRefresh}>
+        <Ionicons name="refresh" size={24} color="#4DA6FF" />
+      </TouchableOpacity>
     </View>
   );
 }
-
-const mapStyle = [
-  { elementType: 'geometry', stylers: [{ color: '#1d2c4d' }] },
-  { elementType: 'labels.text.fill', stylers: [{ color: '#8ec3b9' }] },
-  { elementType: 'labels.text.stroke', stylers: [{ color: '#1a3646' }] },
-  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#304a7d' }] },
-  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#255763' }] },
-  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#0e1626' }] },
-];
 
 const styles = StyleSheet.create({
   container: {
@@ -418,113 +486,25 @@ const styles = StyleSheet.create({
     marginTop: 16,
     fontSize: 16,
   },
-  map: {
-    flex: 1,
-  },
-  webMapContainer: {
+  leafletContainer: {
     flex: 1,
     position: 'relative',
   },
-  staticMapContainer: {
+  webview: {
     flex: 1,
-    position: 'relative',
+    backgroundColor: '#0F2744',
   },
-  staticMapImage: {
-    width: '100%',
-    height: '100%',
-  },
-  mapPlaceholder: {
-    flex: 1,
-    backgroundColor: '#1A3A5C',
+  mapLoading: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 20,
+    backgroundColor: '#0F2744',
   },
-  mapPlaceholderTitle: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginTop: 16,
-  },
-  mapPlaceholderCoords: {
-    fontSize: 14,
-    color: '#8BA4C4',
-    marginTop: 8,
-  },
-  openMapButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#4DA6FF',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 10,
-    marginTop: 24,
-  },
-  openMapButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-    marginLeft: 8,
-  },
-  mapTapOverlay: {
-    position: 'absolute',
-    top: '50%',
-    left: '50%',
-    transform: [{ translateX: -80 }, { translateY: -20 }],
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  mapTapText: {
-    color: '#fff',
-    fontSize: 14,
-    marginLeft: 8,
-  },
-  webMapOverlay: {
-    position: 'absolute',
-    bottom: 100,
-    left: 16,
-    right: 16,
-    backgroundColor: 'rgba(26, 58, 92, 0.95)',
-    borderRadius: 12,
-    padding: 16,
-  },
-  webMapOverlayTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#fff',
-    marginBottom: 10,
-  },
-  webMapUser: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  webMapUserName: {
-    flex: 1,
-    color: '#B8CDE8',
-    fontSize: 13,
-    marginLeft: 8,
-  },
-  webMapUserDistance: {
-    color: '#4DA6FF',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  webMapNoData: {
-    color: '#5A7A9A',
-    fontSize: 13,
-    fontStyle: 'italic',
-  },
-  mapFallback: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  mapFallbackText: {
+  mapLoadingText: {
     color: '#8BA4C4',
     marginTop: 16,
     fontSize: 16,
@@ -539,7 +519,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: 'rgba(15, 39, 68, 0.9)',
+    backgroundColor: 'rgba(15, 39, 68, 0.95)',
     paddingHorizontal: 20,
     paddingVertical: 16,
     marginTop: Platform.OS === 'android' ? 40 : 0,
@@ -598,38 +578,18 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   legendDistance: {
-    color: '#8BA4C4',
+    color: '#4DA6FF',
     fontSize: 12,
+    fontWeight: '600',
   },
   emptyLegendText: {
     color: '#5A7A9A',
     fontSize: 14,
     fontStyle: 'italic',
   },
-  marker: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: '#fff',
-  },
-  locationButton: {
-    position: 'absolute',
-    bottom: 100,
-    right: 16,
-    backgroundColor: '#1A3A5C',
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    alignItems: 'center',
-    justifyContent: 'center',
-    elevation: 5,
-  },
   refreshButton: {
     position: 'absolute',
-    bottom: 160,
+    bottom: 100,
     right: 16,
     backgroundColor: '#1A3A5C',
     width: 48,
