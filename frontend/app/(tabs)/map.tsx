@@ -54,37 +54,40 @@ const ROUTE_COLORS = [
   '#00BCD4', '#E91E63', '#FFEB3B', '#795548', '#607D8B',
 ];
 
-// Web Map Component using Static Map Image
+// Web Map Component using OpenStreetMap Static Tiles
 function WebMapView({ userLocation, territories }: { userLocation: { lat: number; lng: number } | null; territories: Territory[] }) {
   const lat = userLocation?.lat || 41.2995;
   const lng = userLocation?.lng || 69.2401;
   
-  // Static Map URL
-  const staticMapUrl = `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lng}&zoom=13&size=600x400&maptype=roadmap&key=${GOOGLE_MAPS_API_KEY}`;
+  // OpenStreetMap static tile URL (free, no API key needed)
+  const zoom = 13;
+  const osmTileUrl = `https://tile.openstreetmap.org/${zoom}/${Math.floor((lng + 180) / 360 * Math.pow(2, zoom))}/${Math.floor((1 - Math.log(Math.tan(lat * Math.PI / 180) + 1 / Math.cos(lat * Math.PI / 180)) / Math.PI) / 2 * Math.pow(2, zoom))}.png`;
   
   // Google Maps link for opening in browser
   const googleMapsLink = `https://www.google.com/maps/@${lat},${lng},14z`;
 
   return (
     <View style={styles.webMapContainer}>
-      <TouchableOpacity 
-        style={styles.staticMapContainer}
-        onPress={() => {
-          if (Platform.OS === 'web') {
-            window.open(googleMapsLink, '_blank');
-          }
-        }}
-      >
-        <Image 
-          source={{ uri: staticMapUrl }}
-          style={styles.staticMapImage}
-          resizeMode="cover"
-        />
-        <View style={styles.mapTapOverlay}>
-          <Ionicons name="expand" size={24} color="#fff" />
-          <Text style={styles.mapTapText}>Xaritani ochish uchun bosing</Text>
+      <View style={styles.staticMapContainer}>
+        {/* Background color as map placeholder */}
+        <View style={styles.mapPlaceholder}>
+          <Ionicons name="map" size={80} color="#4DA6FF" />
+          <Text style={styles.mapPlaceholderTitle}>Toshkent, O'zbekiston</Text>
+          <Text style={styles.mapPlaceholderCoords}>{lat.toFixed(4)}, {lng.toFixed(4)}</Text>
+          
+          <TouchableOpacity 
+            style={styles.openMapButton}
+            onPress={() => {
+              if (Platform.OS === 'web') {
+                window.open(googleMapsLink, '_blank');
+              }
+            }}
+          >
+            <Ionicons name="open-outline" size={20} color="#fff" />
+            <Text style={styles.openMapButtonText}>Google Xaritada ochish</Text>
+          </TouchableOpacity>
         </View>
-      </TouchableOpacity>
+      </View>
       
       {/* Overlay with user info */}
       <View style={styles.webMapOverlay}>
