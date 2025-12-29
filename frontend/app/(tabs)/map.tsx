@@ -111,8 +111,8 @@ function generateLeafletHTML(
       attributionControl: false
     }).setView([${userLocation.lat}, ${userLocation.lng}], 14);
 
-    // Dark theme tiles from CartoDB
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    // White/Light theme tiles from OpenStreetMap
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19
     }).addTo(map);
 
