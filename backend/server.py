@@ -79,6 +79,7 @@ class UserLogin(BaseModel):
 class UserUpdate(BaseModel):
     name: Optional[str] = None
     avatar: Optional[str] = None
+    route_color: Optional[str] = None
 
 class PasswordChange(BaseModel):
     old_password: str
