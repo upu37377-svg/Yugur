@@ -39,7 +39,7 @@ const ROUTE_COLORS = [
   '#00BCD4', '#E91E63', '#8BC34A', '#795548', '#607D8B',
 ];
 
-// Generate Leaflet HTML with filled polygons and territory overlap
+// Generate Leaflet HTML with filled polygons and avatar markers
 function generateLeafletHTML(
   userLocation: { lat: number; lng: number },
   territories: Territory[],
@@ -93,25 +93,45 @@ function generateLeafletHTML(
     `;
   }).join('\n');
 
-  // Generate markers for each user (at their most recent run start)
+  // Generate avatar markers for each user
   const markersCode = territories.map((territory, index) => {
     if (territory.runs.length === 0 || territory.runs[0].route.length === 0) return '';
     
     const latestRun = territory.runs[0];
     const startPoint = latestRun.route[0];
     const color = ROUTE_COLORS[index % ROUTE_COLORS.length];
+    const hasAvatar = territory.user_avatar && territory.user_avatar.length > 0;
+    const initial = territory.user_name.charAt(0).toUpperCase();
     
-    return `
-      // Marker for ${territory.user_name}
-      L.circleMarker([${startPoint.lat}, ${startPoint.lng}], {
-        radius: 12,
-        fillColor: '${color}',
-        color: '#fff',
-        weight: 3,
-        opacity: 1,
-        fillOpacity: 1
-      }).addTo(map).bindPopup('<b style="color: ${color}">${territory.user_name}</b><br>${territory.user_phone}<br><b>${territory.total_distance.toFixed(2)} km</b>');
-    `;
+    if (hasAvatar) {
+      return `
+        // Avatar marker for ${territory.user_name}
+        var avatarIcon${index} = L.divIcon({
+          className: 'avatar-marker',
+          html: '<div style="width: 44px; height: 44px; border-radius: 50%; border: 3px solid ${color}; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.3);"><img src="${territory.user_avatar}" style="width: 100%; height: 100%; object-fit: cover;" /></div>',
+          iconSize: [44, 44],
+          iconAnchor: [22, 22],
+          popupAnchor: [0, -22]
+        });
+        L.marker([${startPoint.lat}, ${startPoint.lng}], { icon: avatarIcon${index} })
+          .addTo(map)
+          .bindPopup('<b style="color: ${color}">${territory.user_name}</b><br>${territory.user_phone}<br><b>${territory.total_distance.toFixed(2)} km</b>');
+      `;
+    } else {
+      return `
+        // Initial marker for ${territory.user_name}
+        var initialIcon${index} = L.divIcon({
+          className: 'initial-marker',
+          html: '<div style="width: 44px; height: 44px; border-radius: 50%; background: ${color}; border: 3px solid #fff; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: bold; font-size: 18px; box-shadow: 0 2px 8px rgba(0,0,0,0.3);">${initial}</div>',
+          iconSize: [44, 44],
+          iconAnchor: [22, 22],
+          popupAnchor: [0, -22]
+        });
+        L.marker([${startPoint.lat}, ${startPoint.lng}], { icon: initialIcon${index} })
+          .addTo(map)
+          .bindPopup('<b style="color: ${color}">${territory.user_name}</b><br>${territory.user_phone}<br><b>${territory.total_distance.toFixed(2)} km</b>');
+      `;
+    }
   }).join('\n');
 
   return `
@@ -139,6 +159,10 @@ function generateLeafletHTML(
       margin: 12px 14px;
       font-size: 13px;
     }
+    .avatar-marker, .initial-marker {
+      background: transparent !important;
+      border: none !important;
+    }
   </style>
 </head>
 <body>
@@ -157,7 +181,7 @@ function generateLeafletHTML(
     // Draw all territory polygons (oldest first, newest on top)
     ${polygonsCode}
 
-    // Draw user markers
+    // Draw user avatar markers
     ${markersCode}
 
     // Current user location
