@@ -11,6 +11,9 @@ interface User {
   avatar: string | null;
   total_distance: number;
   is_admin: boolean;
+  route_color: string | null;
+  restrictions: any[];
+  rewards: any[];
   created_at: string;
 }
 
@@ -21,7 +24,7 @@ interface AuthContextType {
   login: (phone: string, password: string) => Promise<void>;
   register: (phone: string, name: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
-  updateUser: (data: { name?: string; avatar?: string }) => Promise<void>;
+  updateUser: (data: { name?: string; avatar?: string; route_color?: string }) => Promise<void>;
   changePassword: (oldPassword: string, newPassword: string) => Promise<void>;
   refreshUser: () => Promise<void>;
 }
@@ -46,13 +49,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setToken(storedToken);
         setUser(JSON.parse(storedUser));
         
-        // Verify token is still valid
         try {
           const response = await axios.get(`${API_URL}/api/users/me?token=${storedToken}`);
           setUser(response.data);
           await AsyncStorage.setItem('user_data', JSON.stringify(response.data));
         } catch (error) {
-          // Token invalid, clear storage
           await AsyncStorage.removeItem('auth_token');
           await AsyncStorage.removeItem('user_data');
           setToken(null);
@@ -111,7 +112,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   };
 
-  const updateUser = async (data: { name?: string; avatar?: string }) => {
+  const updateUser = async (data: { name?: string; avatar?: string; route_color?: string }) => {
     if (!token) throw new Error('Not authenticated');
     
     const response = await axios.put(`${API_URL}/api/users/me?token=${token}`, data);
