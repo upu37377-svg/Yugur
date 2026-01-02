@@ -164,7 +164,7 @@ async def root():
 async def register(user: UserCreate):
     existing = await db.users.find_one({"phone": user.phone})
     if existing:
-        raise HTTPException(status_code=400, detail="Phone number already registered")
+        raise HTTPException(status_code=400, detail="Bu nomer dan oldin foydalanilgan")
     
     user_id = str(uuid.uuid4())
     user_doc = {
