@@ -281,6 +281,14 @@ function LeafletMap({ userLocation, territories, currentUserId }: {
     mapDiv.style.height = '100%';
     container.appendChild(mapDiv);
 
+    // Add CSS for avatar markers
+    const styleEl = document.createElement('style');
+    styleEl.textContent = `
+      .avatar-marker, .initial-marker { background: transparent !important; border: none !important; }
+      .avatar-marker img { width: 100%; height: 100%; object-fit: cover; }
+    `;
+    document.head.appendChild(styleEl);
+
     const map = L.map('territory-map', {
       zoomControl: true,
       attributionControl: false
@@ -334,39 +342,56 @@ function LeafletMap({ userLocation, territories, currentUserId }: {
       }).addTo(map);
     });
 
-    // Draw markers for each user
+    // Draw avatar markers for each user
     territories.forEach((territory, index) => {
       if (territory.runs.length === 0 || territory.runs[0].route.length === 0) return;
 
       const latestRun = territory.runs[0];
       const startPoint = latestRun.route[0];
       const color = ROUTE_COLORS[index % ROUTE_COLORS.length];
+      const hasAvatar = territory.user_avatar && territory.user_avatar.length > 100;
+      const initial = territory.user_name.charAt(0).toUpperCase();
 
-      L.circleMarker([startPoint.lat, startPoint.lng], {
-        radius: 12,
-        fillColor: color,
-        color: '#fff',
-        weight: 3,
-        opacity: 1,
-        fillOpacity: 1
-      }).addTo(map).bindPopup(
-        `<b style="color: ${color}">${territory.user_name}</b><br>` +
-        `${territory.user_phone}<br>` +
-        `<b>${territory.total_distance.toFixed(2)} km</b>`
-      );
+      let iconHtml: string;
+      if (hasAvatar) {
+        iconHtml = `<div style="width: 48px; height: 48px; border-radius: 50%; border: 4px solid ${color}; overflow: hidden; box-shadow: 0 3px 10px rgba(0,0,0,0.4); background: #fff;">
+          <img src="${territory.user_avatar}" style="width: 100%; height: 100%; object-fit: cover;" />
+        </div>`;
+      } else {
+        iconHtml = `<div style="width: 48px; height: 48px; border-radius: 50%; background: ${color}; border: 4px solid #fff; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: bold; font-size: 20px; box-shadow: 0 3px 10px rgba(0,0,0,0.4);">${initial}</div>`;
+      }
+
+      const avatarIcon = L.divIcon({
+        className: 'avatar-marker',
+        html: iconHtml,
+        iconSize: [48, 48],
+        iconAnchor: [24, 24],
+        popupAnchor: [0, -24]
+      });
+
+      L.marker([startPoint.lat, startPoint.lng], { icon: avatarIcon })
+        .addTo(map)
+        .bindPopup(
+          `<div style="text-align: center;">` +
+          (hasAvatar ? `<img src="${territory.user_avatar}" style="width: 60px; height: 60px; border-radius: 50%; object-fit: cover; margin-bottom: 8px; border: 3px solid ${color};" />` : '') +
+          `<br><b style="color: ${color}; font-size: 16px;">${territory.user_name}</b><br>` +
+          `<span style="color: #8BA4C4;">${territory.user_phone}</span><br>` +
+          `<b style="color: ${color}; font-size: 18px;">${territory.total_distance.toFixed(2)} km</b>` +
+          `</div>`
+        );
     });
 
     // Current user location
     L.circleMarker([userLocation.lat, userLocation.lng], {
-      radius: 8,
+      radius: 10,
       fillColor: '#4DA6FF',
       color: '#fff',
-      weight: 3,
+      weight: 4,
       fillOpacity: 1
     }).addTo(map).bindPopup('<b>Sizning joylashuvingiz</b>');
 
     L.circleMarker([userLocation.lat, userLocation.lng], {
-      radius: 20,
+      radius: 25,
       fillColor: '#4DA6FF',
       color: '#4DA6FF',
       weight: 2,
