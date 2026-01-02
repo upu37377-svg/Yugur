@@ -9,12 +9,14 @@ import {
   ScrollView,
   Image,
   RefreshControl,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
-import axios from 'axios';
+import { useAuth } from '../../src/context/AuthContext';
 import { WebView } from 'react-native-webview';
+import axios from 'axios';
 
 const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
 
@@ -28,51 +30,89 @@ interface Territory {
     id: string;
     route: Array<{ lat: number; lng: number; timestamp: number }>;
     distance: number;
+    created_at: string;
   }>;
 }
 
 const ROUTE_COLORS = [
   '#4DA6FF', '#FF6B6B', '#4CAF50', '#FF9500', '#9C27B0',
-  '#00BCD4', '#E91E63', '#FFEB3B', '#795548', '#607D8B',
+  '#00BCD4', '#E91E63', '#8BC34A', '#795548', '#607D8B',
 ];
 
-// Generate Leaflet HTML for WebView
+// Generate Leaflet HTML with filled polygons and territory overlap
 function generateLeafletHTML(
   userLocation: { lat: number; lng: number },
-  territories: Territory[]
+  territories: Territory[],
+  currentUserId?: string
 ): string {
-  const markers = territories
-    .filter(t => t.runs.length > 0)
-    .map((t, i) => {
-      const runs = t.runs.map((run, runIndex) => {
-        if (run.route.length === 0) return '';
-        
-        const polylinePoints = run.route.map(p => `[${p.lat}, ${p.lng}]`).join(',');
-        const color = ROUTE_COLORS[i % ROUTE_COLORS.length];
-        
-        const markerPoint = run.route[0];
-        return `
-          // Polyline for run
-          L.polyline([${polylinePoints}], {
-            color: '${color}',
-            weight: 4,
-            opacity: 0.8
-          }).addTo(map);
-          
-          // Marker at start
-          L.circleMarker([${markerPoint.lat}, ${markerPoint.lng}], {
-            radius: 10,
-            fillColor: '${color}',
-            color: '#fff',
-            weight: 2,
-            opacity: 1,
-            fillOpacity: 0.9
-          }).addTo(map).bindPopup('<b>${t.user_name}</b><br>${t.user_phone}<br>${t.total_distance.toFixed(2)} km');
-        `;
-      }).join('\n');
+  // Sort all runs by created_at to determine overlap priority (newest wins)
+  const allRuns: Array<{
+    run: any;
+    territory: Territory;
+    colorIndex: number;
+    createdAt: Date;
+  }> = [];
+
+  territories.forEach((territory, index) => {
+    territory.runs.forEach(run => {
+      if (run.route.length > 2) {
+        allRuns.push({
+          run,
+          territory,
+          colorIndex: index,
+          createdAt: new Date(run.created_at)
+        });
+      }
+    });
+  });
+
+  // Sort by creation time (oldest first, so newest draws on top)
+  allRuns.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+
+  // Generate polygon and polyline code for each run
+  const polygonsCode = allRuns.map(({ run, territory, colorIndex }) => {
+    const color = ROUTE_COLORS[colorIndex % ROUTE_COLORS.length];
+    const coords = run.route.map((p: any) => `[${p.lat}, ${p.lng}]`).join(',');
+    
+    return `
+      // Territory polygon for ${territory.user_name}
+      L.polygon([${coords}], {
+        color: '${color}',
+        weight: 3,
+        opacity: 0.8,
+        fillColor: '${color}',
+        fillOpacity: 0.25
+      }).addTo(map).bindPopup('<b style="color: ${color}">${territory.user_name}</b><br>${territory.user_phone}<br><span style="color: ${color}">${territory.total_distance.toFixed(2)} km</span>');
       
-      return runs;
-    }).join('\n');
+      // Route line
+      L.polyline([${coords}], {
+        color: '${color}',
+        weight: 4,
+        opacity: 0.9
+      }).addTo(map);
+    `;
+  }).join('\n');
+
+  // Generate markers for each user (at their most recent run start)
+  const markersCode = territories.map((territory, index) => {
+    if (territory.runs.length === 0 || territory.runs[0].route.length === 0) return '';
+    
+    const latestRun = territory.runs[0];
+    const startPoint = latestRun.route[0];
+    const color = ROUTE_COLORS[index % ROUTE_COLORS.length];
+    
+    return `
+      // Marker for ${territory.user_name}
+      L.circleMarker([${startPoint.lat}, ${startPoint.lng}], {
+        radius: 12,
+        fillColor: '${color}',
+        color: '#fff',
+        weight: 3,
+        opacity: 1,
+        fillOpacity: 1
+      }).addTo(map).bindPopup('<b style="color: ${color}">${territory.user_name}</b><br>${territory.user_phone}<br><b>${territory.total_distance.toFixed(2)} km</b>');
+    `;
+  }).join('\n');
 
   return `
 <!DOCTYPE html>
@@ -87,19 +127,17 @@ function generateLeafletHTML(
     html, body { height: 100%; width: 100%; }
     #map { height: 100%; width: 100%; }
     .leaflet-control-attribution { display: none; }
-    .custom-popup .leaflet-popup-content-wrapper {
+    .leaflet-popup-content-wrapper {
       background: #1A3A5C;
       color: #fff;
-      border-radius: 8px;
+      border-radius: 10px;
     }
-    .custom-popup .leaflet-popup-tip {
+    .leaflet-popup-tip {
       background: #1A3A5C;
     }
     .leaflet-popup-content {
-      margin: 10px 12px;
-    }
-    .leaflet-popup-content b {
-      color: #4DA6FF;
+      margin: 12px 14px;
+      font-size: 13px;
     }
   </style>
 </head>
@@ -109,14 +147,20 @@ function generateLeafletHTML(
     var map = L.map('map', {
       zoomControl: true,
       attributionControl: false
-    }).setView([${userLocation.lat}, ${userLocation.lng}], 14);
+    }).setView([${userLocation.lat}, ${userLocation.lng}], 15);
 
-    // White/Light theme tiles from OpenStreetMap
+    // Light/White OpenStreetMap tiles
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19
     }).addTo(map);
 
-    // User location marker
+    // Draw all territory polygons (oldest first, newest on top)
+    ${polygonsCode}
+
+    // Draw user markers
+    ${markersCode}
+
+    // Current user location
     L.circleMarker([${userLocation.lat}, ${userLocation.lng}], {
       radius: 8,
       fillColor: '#4DA6FF',
@@ -126,32 +170,46 @@ function generateLeafletHTML(
       fillOpacity: 1
     }).addTo(map).bindPopup('<b>Sizning joylashuvingiz</b>');
 
-    // Add pulse animation for user location
+    // Pulse effect for user location
     L.circleMarker([${userLocation.lat}, ${userLocation.lng}], {
       radius: 20,
       fillColor: '#4DA6FF',
       color: '#4DA6FF',
-      weight: 1,
+      weight: 2,
       opacity: 0.3,
-      fillOpacity: 0.2
+      fillOpacity: 0.15
     }).addTo(map);
 
-    ${markers}
+    // Fit bounds to show all territories
+    var allCoords = [];
+    ${territories.map((t, i) => 
+      t.runs.map(r => 
+        r.route.map((p: any) => `allCoords.push([${p.lat}, ${p.lng}]);`).join('')
+      ).join('')
+    ).join('')}
+    
+    if (allCoords.length > 0) {
+      var bounds = L.latLngBounds(allCoords);
+      bounds.extend([${userLocation.lat}, ${userLocation.lng}]);
+      map.fitBounds(bounds, { padding: [30, 30], maxZoom: 16 });
+    }
   </script>
 </body>
 </html>
   `;
 }
 
-// Leaflet Map Component for Web
-function LeafletWebMap({ userLocation, territories }: { 
+// Leaflet Map Component
+function LeafletMap({ userLocation, territories, currentUserId }: { 
   userLocation: { lat: number; lng: number }; 
-  territories: Territory[] 
+  territories: Territory[];
+  currentUserId?: string;
 }) {
   const [mapLoaded, setMapLoaded] = useState(false);
+  const mapRef = React.useRef<any>(null);
+  const leafletMapRef = React.useRef<any>(null);
 
   useEffect(() => {
-    // Dynamically load Leaflet CSS and JS for web
     if (Platform.OS === 'web') {
       const linkEl = document.createElement('link');
       linkEl.rel = 'stylesheet';
@@ -160,97 +218,158 @@ function LeafletWebMap({ userLocation, territories }: {
 
       const scriptEl = document.createElement('script');
       scriptEl.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-      scriptEl.onload = () => setMapLoaded(true);
+      scriptEl.onload = () => {
+        setMapLoaded(true);
+        initializeWebMap();
+      };
       document.head.appendChild(scriptEl);
 
       return () => {
-        document.head.removeChild(linkEl);
-        document.head.removeChild(scriptEl);
+        if (leafletMapRef.current) {
+          leafletMapRef.current.remove();
+        }
       };
     }
   }, []);
 
   useEffect(() => {
-    if (Platform.OS === 'web' && mapLoaded && (window as any).L) {
-      const mapContainer = document.getElementById('leaflet-map-container');
-      if (mapContainer && !mapContainer.hasChildNodes()) {
-        const mapDiv = document.createElement('div');
-        mapDiv.id = 'leaflet-map';
-        mapDiv.style.width = '100%';
-        mapDiv.style.height = '100%';
-        mapContainer.appendChild(mapDiv);
-
-        const L = (window as any).L;
-        const map = L.map('leaflet-map').setView([userLocation.lat, userLocation.lng], 14);
-
-        // White/Light theme tiles from OpenStreetMap
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-          maxZoom: 19,
-          attribution: ''
-        }).addTo(map);
-
-        // User location marker
-        L.circleMarker([userLocation.lat, userLocation.lng], {
-          radius: 8,
-          fillColor: '#4DA6FF',
-          color: '#fff',
-          weight: 3,
-          opacity: 1,
-          fillOpacity: 1
-        }).addTo(map).bindPopup('<b>Sizning joylashuvingiz</b>');
-
-        // Pulse effect
-        L.circleMarker([userLocation.lat, userLocation.lng], {
-          radius: 20,
-          fillColor: '#4DA6FF',
-          color: '#4DA6FF',
-          weight: 1,
-          opacity: 0.3,
-          fillOpacity: 0.2
-        }).addTo(map);
-
-        // Add territories
-        territories.forEach((territory, i) => {
-          territory.runs.forEach(run => {
-            if (run.route.length > 0) {
-              const color = ROUTE_COLORS[i % ROUTE_COLORS.length];
-              
-              // Polyline
-              if (run.route.length > 1) {
-                const latLngs = run.route.map(p => [p.lat, p.lng]);
-                L.polyline(latLngs, {
-                  color: color,
-                  weight: 4,
-                  opacity: 0.8
-                }).addTo(map);
-              }
-
-              // Marker
-              L.circleMarker([run.route[0].lat, run.route[0].lng], {
-                radius: 10,
-                fillColor: color,
-                color: '#fff',
-                weight: 2,
-                opacity: 1,
-                fillOpacity: 0.9
-              }).addTo(map).bindPopup(
-                `<b style="color: ${color}">${territory.user_name}</b><br>` +
-                `${territory.user_phone}<br>` +
-                `<span style="color: #4DA6FF">${territory.total_distance.toFixed(2)} km</span>`
-              );
-            }
-          });
-        });
-      }
+    if (Platform.OS === 'web' && mapLoaded) {
+      initializeWebMap();
     }
-  }, [mapLoaded, userLocation, territories]);
+  }, [mapLoaded, territories, userLocation]);
+
+  const initializeWebMap = () => {
+    const L = (window as any).L;
+    if (!L) return;
+
+    const container = document.getElementById('territory-map-container');
+    if (!container) return;
+
+    // Clear existing map
+    if (leafletMapRef.current) {
+      leafletMapRef.current.remove();
+    }
+    container.innerHTML = '';
+
+    const mapDiv = document.createElement('div');
+    mapDiv.id = 'territory-map';
+    mapDiv.style.width = '100%';
+    mapDiv.style.height = '100%';
+    container.appendChild(mapDiv);
+
+    const map = L.map('territory-map', {
+      zoomControl: true,
+      attributionControl: false
+    }).setView([userLocation.lat, userLocation.lng], 15);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19
+    }).addTo(map);
+
+    leafletMapRef.current = map;
+
+    // Sort runs by created_at for overlap priority
+    const allRuns: any[] = [];
+    territories.forEach((territory, index) => {
+      territory.runs.forEach(run => {
+        if (run.route.length > 2) {
+          allRuns.push({
+            run,
+            territory,
+            colorIndex: index,
+            createdAt: new Date(run.created_at)
+          });
+        }
+      });
+    });
+    allRuns.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+
+    // Draw polygons and routes (oldest first)
+    allRuns.forEach(({ run, territory, colorIndex }) => {
+      const color = ROUTE_COLORS[colorIndex % ROUTE_COLORS.length];
+      const latLngs = run.route.map((p: any) => [p.lat, p.lng]);
+
+      // Filled polygon with transparency
+      L.polygon(latLngs, {
+        color: color,
+        weight: 3,
+        opacity: 0.8,
+        fillColor: color,
+        fillOpacity: 0.25
+      }).addTo(map).bindPopup(
+        `<b style="color: ${color}">${territory.user_name}</b><br>` +
+        `${territory.user_phone}<br>` +
+        `<span style="color: ${color}; font-weight: bold">${territory.total_distance.toFixed(2)} km</span>`
+      );
+
+      // Route line
+      L.polyline(latLngs, {
+        color: color,
+        weight: 4,
+        opacity: 0.9
+      }).addTo(map);
+    });
+
+    // Draw markers for each user
+    territories.forEach((territory, index) => {
+      if (territory.runs.length === 0 || territory.runs[0].route.length === 0) return;
+
+      const latestRun = territory.runs[0];
+      const startPoint = latestRun.route[0];
+      const color = ROUTE_COLORS[index % ROUTE_COLORS.length];
+
+      L.circleMarker([startPoint.lat, startPoint.lng], {
+        radius: 12,
+        fillColor: color,
+        color: '#fff',
+        weight: 3,
+        opacity: 1,
+        fillOpacity: 1
+      }).addTo(map).bindPopup(
+        `<b style="color: ${color}">${territory.user_name}</b><br>` +
+        `${territory.user_phone}<br>` +
+        `<b>${territory.total_distance.toFixed(2)} km</b>`
+      );
+    });
+
+    // Current user location
+    L.circleMarker([userLocation.lat, userLocation.lng], {
+      radius: 8,
+      fillColor: '#4DA6FF',
+      color: '#fff',
+      weight: 3,
+      fillOpacity: 1
+    }).addTo(map).bindPopup('<b>Sizning joylashuvingiz</b>');
+
+    L.circleMarker([userLocation.lat, userLocation.lng], {
+      radius: 20,
+      fillColor: '#4DA6FF',
+      color: '#4DA6FF',
+      weight: 2,
+      opacity: 0.3,
+      fillOpacity: 0.15
+    }).addTo(map);
+
+    // Fit bounds
+    const allCoords: any[] = [[userLocation.lat, userLocation.lng]];
+    territories.forEach(t => {
+      t.runs.forEach(r => {
+        r.route.forEach(p => allCoords.push([p.lat, p.lng]));
+      });
+    });
+
+    if (allCoords.length > 1) {
+      const bounds = L.latLngBounds(allCoords);
+      map.fitBounds(bounds, { padding: [30, 30], maxZoom: 16 });
+    }
+  };
 
   if (Platform.OS === 'web') {
     return (
-      <View style={styles.leafletContainer}>
+      <View style={styles.mapContainer}>
         <div 
-          id="leaflet-map-container" 
-          style={{ width: '100%', height: '100%', backgroundColor: '#0F2744' }}
+          id="territory-map-container" 
+          style={{ width: '100%', height: '100%' }}
         />
         {!mapLoaded && (
           <View style={styles.mapLoading}>
@@ -262,28 +381,25 @@ function LeafletWebMap({ userLocation, territories }: {
     );
   }
 
-  // For native platforms, use WebView with Leaflet HTML
-  const htmlContent = generateLeafletHTML(userLocation, territories);
-  
+  // Native - WebView
+  const htmlContent = generateLeafletHTML(userLocation, territories, currentUserId);
   return (
-    <WebView
-      style={styles.webview}
-      originWhitelist={['*']}
-      source={{ html: htmlContent }}
-      javaScriptEnabled={true}
-      domStorageEnabled={true}
-      startInLoadingState={true}
-      renderLoading={() => (
-        <View style={styles.mapLoading}>
-          <ActivityIndicator size="large" color="#4DA6FF" />
-          <Text style={styles.mapLoadingText}>Xarita yuklanmoqda...</Text>
-        </View>
-      )}
-    />
+    <View style={styles.mapContainer}>
+      <WebView
+        key={`map-${territories.length}-${Date.now()}`}
+        style={styles.webview}
+        originWhitelist={['*']}
+        source={{ html: htmlContent }}
+        javaScriptEnabled={true}
+        domStorageEnabled={true}
+        scrollEnabled={false}
+      />
+    </View>
   );
 }
 
 export default function MapScreen() {
+  const { user, token } = useAuth();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [territories, setTerritories] = useState<Territory[]>([]);
@@ -340,15 +456,13 @@ export default function MapScreen() {
     );
   }
 
-  // Show list view
+  // List view
   if (showList) {
     return (
       <SafeAreaView style={styles.container}>
         <ScrollView
           contentContainerStyle={styles.scrollContent}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#4DA6FF" />
-          }
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#4DA6FF" />}
         >
           <View style={styles.headerRow}>
             <Text style={styles.headerTitle}>Hududlar</Text>
@@ -384,61 +498,48 @@ export default function MapScreen() {
             <View style={styles.emptyCard}>
               <Ionicons name="walk" size={64} color="#2A4A6A" />
               <Text style={styles.emptyText}>Hali yugurish yo'llari yo'q</Text>
-              <Text style={styles.emptySubtext}>Hududingizni egallash uchun yuguring!</Text>
             </View>
           ) : (
             territories.filter(t => t.runs.length > 0).map((territory, index) => (
               <View key={territory.user_id} style={styles.territoryCard}>
-                <View style={styles.territoryHeader}>
-                  <View style={[styles.colorDot, { backgroundColor: ROUTE_COLORS[index % ROUTE_COLORS.length] }]} />
-                  {territory.user_avatar ? (
-                    <Image source={{ uri: territory.user_avatar }} style={styles.avatar} />
-                  ) : (
-                    <View style={styles.avatarPlaceholder}>
-                      <Ionicons name="person" size={16} color="#5A7A9A" />
+                <View style={[styles.colorBar, { backgroundColor: ROUTE_COLORS[index % ROUTE_COLORS.length] }]} />
+                <View style={styles.territoryContent}>
+                  <View style={styles.territoryHeader}>
+                    {territory.user_avatar ? (
+                      <Image source={{ uri: territory.user_avatar }} style={styles.avatar} />
+                    ) : (
+                      <View style={[styles.avatarPlaceholder, { backgroundColor: ROUTE_COLORS[index % ROUTE_COLORS.length] + '33' }]}>
+                        <Ionicons name="person" size={18} color={ROUTE_COLORS[index % ROUTE_COLORS.length]} />
+                      </View>
+                    )}
+                    <View style={styles.territoryInfo}>
+                      <Text style={styles.territoryName}>{territory.user_name}</Text>
+                      <Text style={styles.territoryPhone}>{territory.user_phone}</Text>
                     </View>
-                  )}
-                  <View style={styles.territoryInfo}>
-                    <Text style={styles.territoryName}>{territory.user_name}</Text>
-                    <Text style={styles.territoryPhone}>{territory.user_phone}</Text>
-                  </View>
-                  <View style={styles.territoryStats}>
-                    <Text style={styles.distanceValue}>{territory.total_distance.toFixed(2)} km</Text>
-                    <Text style={styles.runsCount}>{territory.runs.length} yugurish</Text>
+                    <View style={styles.territoryStats}>
+                      <Text style={[styles.distanceValue, { color: ROUTE_COLORS[index % ROUTE_COLORS.length] }]}>
+                        {territory.total_distance.toFixed(2)} km
+                      </Text>
+                      <Text style={styles.runsCount}>{territory.runs.length} yugurish</Text>
+                    </View>
                   </View>
                 </View>
               </View>
             ))
           )}
-
-          <Text style={styles.sectionTitle}>Barcha foydalanuvchilar</Text>
-          {territories.filter(t => t.runs.length === 0).map((territory) => (
-            <View key={territory.user_id} style={styles.userCard}>
-              {territory.user_avatar ? (
-                <Image source={{ uri: territory.user_avatar }} style={styles.smallAvatar} />
-              ) : (
-                <View style={styles.smallAvatarPlaceholder}>
-                  <Ionicons name="person" size={14} color="#5A7A9A" />
-                </View>
-              )}
-              <View style={styles.userInfo}>
-                <Text style={styles.userName}>{territory.user_name}</Text>
-                <Text style={styles.userPhone}>{territory.user_phone}</Text>
-              </View>
-              <View style={styles.noRunsBadge}>
-                <Text style={styles.noRunsText}>Yugurish yo'q</Text>
-              </View>
-            </View>
-          ))}
         </ScrollView>
       </SafeAreaView>
     );
   }
 
-  // Show map view
+  // Map view
   return (
     <View style={styles.container}>
-      <LeafletWebMap userLocation={userLocation} territories={territories} />
+      <LeafletMap 
+        userLocation={userLocation} 
+        territories={territories} 
+        currentUserId={user?.id}
+      />
 
       <SafeAreaView style={styles.overlay} pointerEvents="box-none">
         <View style={styles.header}>
@@ -450,16 +551,18 @@ export default function MapScreen() {
         </View>
 
         <View style={styles.legendCard}>
-          <Text style={styles.legendTitle}>Xaritadagi foydalanuvchilar</Text>
+          <Text style={styles.legendTitle}>Hududlar</Text>
           {territories.filter(t => t.runs.length > 0).slice(0, 5).map((territory, index) => (
             <View key={territory.user_id} style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: ROUTE_COLORS[index % ROUTE_COLORS.length] }]} />
+              <View style={[styles.legendColor, { backgroundColor: ROUTE_COLORS[index % ROUTE_COLORS.length] }]} />
               <Text style={styles.legendName} numberOfLines={1}>{territory.user_name}</Text>
-              <Text style={styles.legendDistance}>{territory.total_distance.toFixed(1)} km</Text>
+              <Text style={[styles.legendDistance, { color: ROUTE_COLORS[index % ROUTE_COLORS.length] }]}>
+                {territory.total_distance.toFixed(1)} km
+              </Text>
             </View>
           ))}
           {territories.filter(t => t.runs.length > 0).length === 0 && (
-            <Text style={styles.emptyLegendText}>Hali yugurish ma'lumotlari yo'q</Text>
+            <Text style={styles.emptyLegendText}>Hali hudud yo'q</Text>
           )}
         </View>
       </SafeAreaView>
@@ -486,13 +589,12 @@ const styles = StyleSheet.create({
     marginTop: 16,
     fontSize: 16,
   },
-  leafletContainer: {
+  mapContainer: {
     flex: 1,
     position: 'relative',
   },
   webview: {
     flex: 1,
-    backgroundColor: '#0F2744',
   },
   mapLoading: {
     position: 'absolute',
@@ -507,7 +609,6 @@ const styles = StyleSheet.create({
   mapLoadingText: {
     color: '#8BA4C4',
     marginTop: 16,
-    fontSize: 16,
   },
   overlay: {
     position: 'absolute',
@@ -566,10 +667,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 8,
   },
-  legendDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
+  legendColor: {
+    width: 16,
+    height: 16,
+    borderRadius: 4,
     marginRight: 10,
   },
   legendName: {
@@ -578,8 +679,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   legendDistance: {
-    color: '#4DA6FF',
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '600',
   },
   emptyLegendText: {
@@ -633,51 +733,45 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#fff',
     marginBottom: 16,
-    marginTop: 8,
   },
   emptyCard: {
     backgroundColor: '#1A3A5C',
     borderRadius: 16,
     padding: 40,
     alignItems: 'center',
-    marginBottom: 20,
   },
   emptyText: {
-    fontSize: 18,
+    fontSize: 16,
     color: '#8BA4C4',
     marginTop: 16,
-  },
-  emptySubtext: {
-    fontSize: 14,
-    color: '#5A7A9A',
-    marginTop: 8,
   },
   territoryCard: {
     backgroundColor: '#1A3A5C',
     borderRadius: 12,
-    padding: 16,
     marginBottom: 12,
+    flexDirection: 'row',
+    overflow: 'hidden',
+  },
+  colorBar: {
+    width: 6,
+  },
+  territoryContent: {
+    flex: 1,
+    padding: 14,
   },
   territoryHeader: {
     flexDirection: 'row',
     alignItems: 'center',
   },
-  colorDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    marginRight: 10,
-  },
   avatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
   },
   avatarPlaceholder: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#2A4A6A',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -701,56 +795,10 @@ const styles = StyleSheet.create({
   distanceValue: {
     fontSize: 16,
     fontWeight: 'bold',
-    color: '#4DA6FF',
   },
   runsCount: {
     fontSize: 12,
     color: '#8BA4C4',
     marginTop: 2,
-  },
-  userCard: {
-    backgroundColor: '#1A3A5C',
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  smallAvatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-  },
-  smallAvatarPlaceholder: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#2A4A6A',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  userInfo: {
-    flex: 1,
-    marginLeft: 12,
-  },
-  userName: {
-    fontSize: 15,
-    fontWeight: '500',
-    color: '#fff',
-  },
-  userPhone: {
-    fontSize: 12,
-    color: '#8BA4C4',
-    marginTop: 2,
-  },
-  noRunsBadge: {
-    backgroundColor: '#2A4A6A',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  noRunsText: {
-    color: '#5A7A9A',
-    fontSize: 11,
   },
 });
