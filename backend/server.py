@@ -269,6 +269,7 @@ async def get_me(token: str):
         "avatar": user.get("avatar"),
         "total_distance": user.get("total_distance", 0.0),
         "is_admin": user.get("is_admin", False),
+        "route_color": user.get("route_color", "#4DA6FF"),
         "restrictions": user.get("restrictions", []),
         "rewards": user.get("rewards", []),
         "unread_notifications": len(notifications),
