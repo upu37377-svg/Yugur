@@ -175,6 +175,7 @@ async def register(user: UserCreate):
         "password": hash_password(user.password),
         "avatar": None,
         "total_distance": 0.0,
+        "route_color": "#4DA6FF",
         "is_admin": False,
         "restrictions": [],
         "rewards": [],
@@ -198,8 +199,10 @@ async def register(user: UserCreate):
             "name": user.name,
             "avatar": None,
             "total_distance": 0.0,
+            "route_color": "#4DA6FF",
             "is_admin": False,
             "restrictions": [],
+            "rewards": [],
             "created_at": user_doc["created_at"].isoformat()
         }
     }
@@ -236,8 +239,10 @@ async def login(credentials: UserLogin):
             "name": user["name"],
             "avatar": user.get("avatar"),
             "total_distance": user.get("total_distance", 0.0),
+            "route_color": user.get("route_color", "#4DA6FF"),
             "is_admin": user.get("is_admin", False),
             "restrictions": user.get("restrictions", []),
+            "rewards": user.get("rewards", []),
             "created_at": user["created_at"].isoformat()
         }
     }
