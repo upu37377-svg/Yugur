@@ -284,6 +284,8 @@ async def update_me(token: str, update: UserUpdate):
         update_doc["name"] = update.name
     if update.avatar is not None:
         update_doc["avatar"] = update.avatar
+    if update.route_color is not None:
+        update_doc["route_color"] = update.route_color
     
     if update_doc:
         await db.users.update_one({"id": user["id"]}, {"$set": update_doc})
@@ -296,7 +298,9 @@ async def update_me(token: str, update: UserUpdate):
         "avatar": updated_user.get("avatar"),
         "total_distance": updated_user.get("total_distance", 0.0),
         "is_admin": updated_user.get("is_admin", False),
+        "route_color": updated_user.get("route_color", "#4DA6FF"),
         "restrictions": updated_user.get("restrictions", []),
+        "rewards": updated_user.get("rewards", []),
         "created_at": updated_user["created_at"].isoformat()
     }
 
