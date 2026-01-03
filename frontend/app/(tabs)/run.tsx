@@ -29,7 +29,8 @@ interface LocationPoint {
 // Generate Leaflet HTML with real-time route
 function generateLiveMapHTML(
   userLocation: { lat: number; lng: number },
-  route: LocationPoint[]
+  route: LocationPoint[],
+  routeColor: string = '#4DA6FF'
 ): string {
   const routePoints = route.map(p => `[${p.lat}, ${p.lng}]`).join(',');
   
@@ -51,6 +52,7 @@ function generateLiveMapHTML(
 <body>
   <div id="map"></div>
   <script>
+    var routeColor = '${routeColor}';
     var map = L.map('map', {
       zoomControl: false,
       attributionControl: false
@@ -61,11 +63,11 @@ function generateLiveMapHTML(
       maxZoom: 19
     }).addTo(map);
 
-    // Route polyline (blue line)
+    // Route polyline with user's selected color
     var routeCoords = [${routePoints}];
     if (routeCoords.length > 0) {
       var polyline = L.polyline(routeCoords, {
-        color: '#4DA6FF',
+        color: routeColor,
         weight: 5,
         opacity: 0.9,
         lineJoin: 'round',
@@ -82,22 +84,22 @@ function generateLiveMapHTML(
         fillOpacity: 1
       }).addTo(map).bindPopup('<b>Boshlang\\'ich nuqta</b>');
 
-      // Current position marker (blue pulsing)
+      // Current position marker with user's color
       var currentPos = routeCoords[routeCoords.length - 1];
       L.circleMarker(currentPos, {
         radius: 12,
-        fillColor: '#4DA6FF',
+        fillColor: routeColor,
         color: '#fff',
         weight: 3,
         opacity: 1,
         fillOpacity: 1
       }).addTo(map);
 
-      // Pulse effect
+      // Pulse effect with user's color
       L.circleMarker(currentPos, {
         radius: 25,
-        fillColor: '#4DA6FF',
-        color: '#4DA6FF',
+        fillColor: routeColor,
+        color: routeColor,
         weight: 2,
         opacity: 0.3,
         fillOpacity: 0.2
@@ -108,10 +110,10 @@ function generateLiveMapHTML(
         map.fitBounds(polyline.getBounds(), { padding: [30, 30] });
       }
     } else {
-      // Just show user location
+      // Just show user location with their color
       L.circleMarker([${userLocation.lat}, ${userLocation.lng}], {
         radius: 10,
-        fillColor: '#4DA6FF',
+        fillColor: routeColor,
         color: '#fff',
         weight: 3,
         opacity: 1,
